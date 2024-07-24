@@ -52,9 +52,9 @@ class Trainer:
         self.sampling_freq = sampling_freq
         self.model = DDP(model, device_ids=[gpu_id])
 
-    def _run_batch(self, source, target):
+    def _run_batch(self, targets, condining_snapshot):
         self.optimizer.zero_grad()
-        loss = self.model(source, target)
+        loss = self.model(targets, condining_snapshot)
         loss.backward()
         loss_value = loss.item()
         self.optimizer.step()
@@ -64,12 +64,10 @@ class Trainer:
     def _run_epoch(self, epoch):
         self.train_data.sampler.set_epoch(epoch)
         loss_values = []
-        for source, target in self.train_data:
-            source = source.to(self.gpu_id)
-            target = target.to(self.gpu_id)
-            
-            #targets = targets.to(self.gpu_id)
-            loss_values.append(self._run_batch(source, target))
+        for condining_snapshot, targets in self.train_data:
+            condining_snapshot = condining_snapshot.to(self.gpu_id)
+            targets = targets.to(self.gpu_id)            
+            loss_values.append(self._run_batch(targets, condining_snapshot))
         return loss_values
 
     def _save_checkpoint(self, epoch):
