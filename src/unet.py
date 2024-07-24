@@ -11,6 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+
 class GroupNorm32(nn.GroupNorm):
     def forward(self, x):
         return super().forward(x.float()).type(x.dtype)
@@ -595,6 +596,7 @@ class UNetModel(nn.Module):
         use_scale_shift_norm=False,
         resblock_updown=False,
         use_new_attention_order=False,
+        lowres_cond = False,
     ):
         super().__init__()
 
@@ -602,7 +604,7 @@ class UNetModel(nn.Module):
             num_heads_upsample = num_heads
 
         self.image_size = image_size
-        self.in_channels = in_channels
+        self.in_channels = in_channels * (2 if lowres_cond else 1)
         self.model_channels = model_channels
         self.out_channels = out_channels
         self.num_res_blocks = num_res_blocks
@@ -616,8 +618,11 @@ class UNetModel(nn.Module):
         self.num_heads = num_heads
         self.num_head_channels = num_head_channels
         self.num_heads_upsample = num_heads_upsample
+        self.lowres_cond = lowres_cond
 
-        time_embed_dim = model_channels * 4
+        time_embed_dim = model_channels * 4 * (2 if lowres_cond else 1)
+        
+                
         self.time_embed = nn.Sequential(
             linear(model_channels, time_embed_dim),
             nn.SiLU(),
@@ -629,7 +634,7 @@ class UNetModel(nn.Module):
 
         ch = input_ch = int(channel_mult[0] * model_channels)
         self.input_blocks = nn.ModuleList(
-            [TimestepEmbedSequential(conv_nd(dims, in_channels, ch, 3, padding=1))]
+            [TimestepEmbedSequential(conv_nd(dims, self.in_channels, ch, 3, padding=1))]
         )
         self._feature_size = ch
         input_block_chans = [ch]
@@ -769,7 +774,7 @@ class UNetModel(nn.Module):
 
 
 
-    def forward(self, x, timesteps, y=None):
+    def forward(self, x, timesteps, y=None, lowres_snapshot=None):
         """
         Apply the model to an input batch.
 
@@ -785,10 +790,13 @@ class UNetModel(nn.Module):
         hs = []
         emb = self.time_embed(timestep_embedding(timesteps, self.model_channels))
 
+        if lowres_snapshot is not None:
+            x = th.cat([x, lowres_snapshot], dim=1)
+
         if self.num_classes is not None:
             assert y.shape == (x.shape[0],)
             emb = emb + self.label_emb(y)
-
+            
         h = x.type(self.dtype)
         for module in self.input_blocks:
             h = module(h, emb)
@@ -808,13 +816,14 @@ def UNet(
     out_channels=1,
     base_width=32,
     num_classes=None,
+    lowres_cond=False,
 ):
 
     if image_size == 256:
         channel_mult = (1, 1, 2, 3, 4)
 
     elif image_size == 512:
-        channel_mult = (1, 1, 2, 2)
+        channel_mult = (1, 1, 2, 3)
 
     elif image_size == 1024:
         channel_mult = (1, 1, 2, 2)
@@ -850,4 +859,5 @@ def UNet(
         use_scale_shift_norm=True,
         resblock_updown=True,
         use_new_attention_order=True,
+        lowres_cond=lowres_cond
     )

@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -83,15 +84,18 @@ class Trainer:
     def _generate_samples(self, epoch):
         self.model.eval()
         with torch.no_grad():
-            PATH = "./train_samples/ddpm_sample_"
-            samples = self.model.module.sample(6, (1, 1024, 1024), 'cuda')
+            PATH = "./train_samples/"
+            if not os.path.exists(PATH):
+                os.makedirs(PATH)            
+            
+            samples = self.model.module.sample(6, (1, 512, 512), 'cuda')
             
             nrow = 2; ncol = 3;
             fig, axs = plt.subplots(nrows=nrow, ncols=ncol, figsize=(10.5, 6.5), layout="constrained")
             axs = np.array(axs)
             for i, ax in enumerate(axs.reshape(-1)):
                 ax.imshow(samples[i,0,:,:].cpu().detach().numpy(), cmap=cmocean.cm.balance)
-            plt.savefig(PATH + str(epoch) + ".png")
+            plt.savefig(PATH + "ddpm_sample_"+ str(epoch) + ".png")
             plt.close()
         print(f"Epoch {epoch} | Generated samples saved at {PATH}")
 
@@ -114,7 +118,7 @@ class Trainer:
 
 def load_train_objs():
     train_set = NSTK(path='16000_2048_2048_seed_3407_w.h5')  # load your dataset
-    model = UNet(image_size=1024, in_channels=1, out_channels=1) # load your model
+    model = UNet(image_size=512, in_channels=1, out_channels=1) # load your model
     #model = NaiveUnet(1, 1, n_feat=32)
     #ddpm = DDPM(eps_model=model.cuda(), betas=(1e-4, 0.02), n_T=1000)
     ddpm = DDPM(eps_model=model.cuda(), betas=(1e-4, 0.04), n_T=1000)
