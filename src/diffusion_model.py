@@ -9,7 +9,7 @@ import torch.nn as nn
 from typing import Dict, Tuple
 
 
-class DDPM(nn.Module):
+class GaussianDiffusionModel(nn.Module):
     def __init__(
         self,
         eps_model: nn.Module,
@@ -17,7 +17,7 @@ class DDPM(nn.Module):
         n_T: int,
         criterion: nn.Module = nn.MSELoss(),
     ) -> None:
-        super(DDPM, self).__init__()
+        super(GaussianDiffusionModel, self).__init__()
         
         
         self.eps_model = eps_model
@@ -32,6 +32,7 @@ class DDPM(nn.Module):
     def forward(self,  snapshots: torch.Tensor, conditioning_snapshots = None) -> torch.Tensor:
         """
         Forward diffusion: tries to guess the epsilon value from snapshot_t using the eps_model.
+        See Alg 1 in https://arxiv.org/pdf/2006.11239
         """
 
         _ts = torch.randint(1, self.n_T + 1, (snapshots.shape[0],)).to(snapshots.device) # t ~ Uniform(0, n_T)
@@ -54,7 +55,10 @@ class DDPM(nn.Module):
 
 
     def sample(self, n_sample: int, size, conditioning_snapshots=None, device='cuda') -> torch.Tensor:
-
+        """
+        Let's sample
+        See Alg 2 in https://arxiv.org/pdf/2006.11239
+        """
         snapshots_i = torch.randn(n_sample, *size).to(device)  # x_T ~ N(0, 1)
         
         if conditioning_snapshots is not None:
@@ -62,7 +66,6 @@ class DDPM(nn.Module):
                                                                        size=[snapshots_i.shape[2], snapshots_i.shape[3]], 
                                                                        mode='bicubic')
 
-        # Let's sample
         for i in range(self.n_T, 0, -1):
             z = torch.randn(n_sample, *size).to(device) if i > 1 else 0
             eps = self.eps_model(snapshots_i, torch.tensor(i / self.n_T).to(device).repeat(n_sample), lowres_snapshot=conditioning_snapshots_interpolated)

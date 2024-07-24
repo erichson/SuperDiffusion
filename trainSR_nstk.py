@@ -18,11 +18,8 @@ import matplotlib.pyplot as plt
 import cmocean
 
 from src.unet import UNet
-from src.ddpm import DDPM
+from src.diffusion_model import GaussianDiffusionModel
 from src.get_data import NSTK_SR as NSTK
-
-
-# export CUDA_VISIBLE_DEVICES=1,3,5,6,7; python train_nstk.py
 
 
 def ddp_setup(rank, world_size):
@@ -136,10 +133,10 @@ class Trainer:
 
 def load_train_objs(superres, args):
     train_set = NSTK(path='16000_2048_2048_seed_3407_w.h5', factor=args.factor)  # load your dataset
-    model = UNet(image_size=512, in_channels=1, out_channels=1, lowres_cond=args.superres) # load your model
-    ddpm = DDPM(eps_model=model.cuda(), betas=(1e-4, 0.02), n_T=1000) # maybe use 0.03 ?
-    optimizer = torch.optim.Adam(ddpm.parameters(), lr=2e-4)
-    return train_set, ddpm, optimizer
+    unet_model = UNet(image_size=512, in_channels=1, out_channels=1, lowres_cond=args.superres) # load your model
+    model = GaussianDiffusionModel(eps_model=unet_model.cuda(), betas=(1e-4, 0.02), n_T=1000)
+    optimizer = torch.optim.Adam(model.parameters(), lr=2e-4)
+    return train_set, model, optimizer
 
 
 def prepare_dataloader(dataset: Dataset, batch_size: int):

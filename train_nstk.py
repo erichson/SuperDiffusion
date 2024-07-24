@@ -1,29 +1,25 @@
+"""
+Created on Fri Jul  23, 2024
+
+@author: ben
+"""
+
 import os
 import numpy as np
 import torch
-import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
 import torch.multiprocessing as mp
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
-import os
-
-from tqdm import tqdm
-
 
 import matplotlib.pyplot as plt
-import matplotlib as mpl
 import cmocean
 
 from src.unet import UNet
-from src.ddpm import DDPM
-#from src.unet import NaiveUnet
+from src.diffusion_model import GaussianDiffusionModel
 from src.get_data import NSTK
-
-
-# export CUDA_VISIBLE_DEVICES=1,3,5,6,7; python train_nstk.py
 
 
 def ddp_setup(rank, world_size):
@@ -118,13 +114,10 @@ class Trainer:
 
 def load_train_objs():
     train_set = NSTK(path='16000_2048_2048_seed_3407_w.h5')  # load your dataset
-    model = UNet(image_size=512, in_channels=1, out_channels=1) # load your model
-    #model = NaiveUnet(1, 1, n_feat=32)
-    #ddpm = DDPM(eps_model=model.cuda(), betas=(1e-4, 0.02), n_T=1000)
-    ddpm = DDPM(eps_model=model.cuda(), betas=(1e-4, 0.04), n_T=1000)
-
-    optimizer = torch.optim.Adam(ddpm.parameters(), lr=2e-4)
-    return train_set, ddpm, optimizer
+    unet_model = UNet(image_size=512, in_channels=1, out_channels=1) # load your model
+    model = GaussianDiffusionModel(eps_model=unet_model.cuda(), betas=(1e-4, 0.04), n_T=1000)
+    optimizer = torch.optim.Adam(model.parameters(), lr=2e-4)
+    return train_set, model, optimizer
 
 
 def prepare_dataloader(dataset: Dataset, batch_size: int):
