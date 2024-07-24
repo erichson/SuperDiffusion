@@ -6,6 +6,7 @@ Created on Fri Jul  23, 2024
 
 import os
 import numpy as np
+import wandb
 import torch
 from torch.utils.data import Dataset, DataLoader
 
@@ -13,6 +14,8 @@ import torch.multiprocessing as mp
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
+
+from diffusers.optimization import get_linear_schedule_with_warmup as scheduler
 
 import matplotlib.pyplot as plt
 import cmocean
@@ -29,7 +32,7 @@ def ddp_setup(rank, world_size):
         world_size: Total number of processes
     """
     os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "12355"
+    os.environ["MASTER_PORT"] = "55234"
     init_process_group(backend="nccl", rank=rank, world_size=world_size)
     torch.cuda.set_device(rank)
 
@@ -41,6 +44,8 @@ class Trainer:
         optimizer: torch.optim.Optimizer,
         gpu_id: int,
         sampling_freq: int,
+        run: wandb,
+        run_name: str
     ) -> None:
         self.gpu_id = gpu_id
         self.model = model.to(gpu_id)
@@ -48,13 +53,16 @@ class Trainer:
         self.optimizer = optimizer
         self.sampling_freq = sampling_freq
         self.model = DDP(model, device_ids=[gpu_id])
+        self.run = run
+        self.run_name = run_name
 
     def _run_batch(self, targets, condining_snapshot):
         self.optimizer.zero_grad()
         loss = self.model(targets, condining_snapshot)
         loss.backward()
-        loss_value = loss.item()
         self.optimizer.step()
+        self.lr_scheduler.step()
+        loss_value = loss.item()
         return loss_value
         
 
@@ -77,7 +85,7 @@ class Trainer:
     def _generate_samples(self, epoch):
         self.model.eval()
         with torch.no_grad():
-            PATH = "./train_samples/"
+            PATH = "./train_samples_" + self.run_name
             if not os.path.exists(PATH):
                 os.makedirs(PATH)
             
@@ -110,12 +118,20 @@ class Trainer:
                axarr[2,i].title.set_text("HR Ground Truth")                 
 
             plt.tight_layout()
-            plt.savefig(PATH + "ddpm_sample_"+ str(epoch) + ".png")
+            plt.savefig(PATH + "/ddpm_sample_"+ str(epoch) + ".png")
             plt.close()
         print(f"Epoch {epoch} | Generated samples saved at {PATH}")
 
 
     def train(self, max_epochs: int):
+        
+        self.lr_scheduler = scheduler(
+            optimizer=self.optimizer,
+            num_warmup_steps=len(self.train_data) * 1, # we need only a very shot warmup phase for our data
+            num_training_steps=(len(self.train_data) * max_epochs),
+        )
+        #print(len(self.train_data))
+
         
         self.model.train()
         for epoch in range(max_epochs):
@@ -125,17 +141,22 @@ class Trainer:
             if self.gpu_id == 0:
                 avg_loss = np.mean(loss_values)
                 print(f"Epoch {epoch} | loss {avg_loss}")
+                self.run.log({"loss": avg_loss, "learning rate": self.lr_scheduler.get_last_lr()})
+
             
-            if self.gpu_id == 0 and (epoch) % self.sampling_freq == 0:
-                self._save_checkpoint(epoch)
-                self._generate_samples(epoch)
+            #if self.gpu_id == 0 and epoch == 0:
+            #    self._save_checkpoint(epoch)
+            
+            if self.gpu_id == 0 and (epoch + 1) % self.sampling_freq == 0:
+                self._save_checkpoint(epoch+1)
+                self._generate_samples(epoch+1)
 
 
 def load_train_objs(superres, args):
     train_set = NSTK(path='16000_2048_2048_seed_3407_w.h5', factor=args.factor)  # load your dataset
     unet_model = UNet(image_size=512, in_channels=1, out_channels=1, lowres_cond=args.superres) # load your model
     model = GaussianDiffusionModel(eps_model=unet_model.cuda(), betas=(1e-4, 0.02), n_T=1000)
-    optimizer = torch.optim.Adam(model.parameters(), lr=2e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     return train_set, model, optimizer
 
 
@@ -149,7 +170,7 @@ def prepare_dataloader(dataset: Dataset, batch_size: int):
     )
 
 
-def main(rank: int, world_size: int, sampling_freq: int, total_epochs: int, batch_size: int, args):
+def main(rank: int, world_size: int, sampling_freq: int, epochs: int, batch_size: int, run, args):
     ddp_setup(rank, world_size)
     dataset, model, optimizer = load_train_objs(superres=args.superres, args=args)
     
@@ -164,24 +185,46 @@ def main(rank: int, world_size: int, sampling_freq: int, total_epochs: int, batc
 
     
     train_data = prepare_dataloader(dataset, batch_size)
-    trainer = Trainer(model, train_data, optimizer, rank, sampling_freq)
-    trainer.train(total_epochs)
+    trainer = Trainer(model, train_data, optimizer, rank, sampling_freq, run, run_name=args.run_name)
+    trainer.train(epochs)
     destroy_process_group()
 
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description='simple distributed training job')
-    parser.add_argument('--total_epochs', default=1500, type=int, help='Total epochs to train the model')
-    parser.add_argument('--sampling_freq', default=10, type=int, help='How often to save a snapshot')
-    parser.add_argument('--batch_size', default=16, type=int, help='Input batch size on each device (default: 32)')
+
+    parser = argparse.ArgumentParser(description='Minimalistic Diffusion Model for Super-resolution')
+    parser.add_argument("--run-name", type=str, default='run1', help="Name of the current run.")
+    parser.add_argument('--epochs', default=500, type=int, help='Total epochs to train the model')
+    parser.add_argument('--sampling-freq', default=50, type=int, help='How often to save a snapshot')
+    parser.add_argument('--batch-size', default=16, type=int, help='Input batch size on each device (default: 32)')
 
     parser.add_argument('--superres', default=True, type=bool, help='Superresolution')
     parser.add_argument('--factor', default=4, type=int, help='upsampling factor')
+
+    parser.add_argument('--learning-rate', default=1e-4, type=int, help='learning rate')
     
     
     args = parser.parse_args()
+
+    # Launch processes.
+    print('Launching processes...')
+    
+    wandb.login()
+    
+    run = wandb.init(
+        # Set the project where this run will be logged
+        project="DiffusionSR",
+        name=args.run_name,
+        # Track hyperparameters and run metadata
+        config={
+            "learning_rate": args.learning_rate,
+            "epochs": args.epochs,
+            "batch size": args.batch_size,
+            "upsampling factor": args.factor,
+        },
+    )
     
     world_size = torch.cuda.device_count()
-    mp.spawn(main, args=(world_size, args.sampling_freq, args.total_epochs, args.batch_size, args), nprocs=world_size)
+    mp.spawn(main, args=(world_size, args.sampling_freq, args.epochs, args.batch_size, run, args), nprocs=world_size)
 
