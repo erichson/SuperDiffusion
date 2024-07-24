@@ -1,3 +1,9 @@
+"""
+Created on Fri Jul  23, 2024
+
+@author: ben
+"""
+
 import os
 import numpy as np
 import torch
@@ -37,13 +43,13 @@ class Trainer:
         train_data: DataLoader,
         optimizer: torch.optim.Optimizer,
         gpu_id: int,
-        save_every: int,
+        sampling_freq: int,
     ) -> None:
         self.gpu_id = gpu_id
         self.model = model.to(gpu_id)
         self.train_data = train_data
         self.optimizer = optimizer
-        self.save_every = save_every
+        self.sampling_freq = sampling_freq
         self.model = DDP(model, device_ids=[gpu_id])
 
     def _run_batch(self, source, target):
@@ -51,14 +57,11 @@ class Trainer:
         loss = self.model(source, target)
         loss.backward()
         loss_value = loss.item()
-        #pbar.set_description(f"epoch: {i:.1f}; loss: {loss_value:.4f}")
         self.optimizer.step()
         return loss_value
         
 
     def _run_epoch(self, epoch):
-        #b_sz = len(next(iter(self.train_data))[0])
-        #print(f"[GPU{self.gpu_id}] Epoch {epoch} | Batchsize: {b_sz} | Steps: {len(self.train_data)}")
         self.train_data.sampler.set_epoch(epoch)
         loss_values = []
         for source, target in self.train_data:
@@ -128,7 +131,7 @@ class Trainer:
                 avg_loss = np.mean(loss_values)
                 print(f"Epoch {epoch} | loss {avg_loss}")
             
-            if self.gpu_id == 0 and (epoch) % self.save_every == 0:
+            if self.gpu_id == 0 and (epoch) % self.sampling_freq == 0:
                 self._save_checkpoint(epoch)
                 self._generate_samples(epoch)
 
@@ -151,7 +154,7 @@ def prepare_dataloader(dataset: Dataset, batch_size: int):
     )
 
 
-def main(rank: int, world_size: int, save_every: int, total_epochs: int, batch_size: int, args):
+def main(rank: int, world_size: int, sampling_freq: int, total_epochs: int, batch_size: int, args):
     ddp_setup(rank, world_size)
     dataset, model, optimizer = load_train_objs(superres=args.superres, args=args)
     
@@ -166,7 +169,7 @@ def main(rank: int, world_size: int, save_every: int, total_epochs: int, batch_s
 
     
     train_data = prepare_dataloader(dataset, batch_size)
-    trainer = Trainer(model, train_data, optimizer, rank, save_every)
+    trainer = Trainer(model, train_data, optimizer, rank, sampling_freq)
     trainer.train(total_epochs)
     destroy_process_group()
 
@@ -175,15 +178,15 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description='simple distributed training job')
     parser.add_argument('--total_epochs', default=1500, type=int, help='Total epochs to train the model')
-    parser.add_argument('--save_every', default=10, type=int, help='How often to save a snapshot')
+    parser.add_argument('--sampling_freq', default=10, type=int, help='How often to save a snapshot')
     parser.add_argument('--batch_size', default=16, type=int, help='Input batch size on each device (default: 32)')
 
     parser.add_argument('--superres', default=True, type=bool, help='Superresolution')
-    parser.add_argument('--factor', default=8, type=int, help='upsampling factor')
+    parser.add_argument('--factor', default=4, type=int, help='upsampling factor')
     
     
     args = parser.parse_args()
     
     world_size = torch.cuda.device_count()
-    mp.spawn(main, args=(world_size, args.save_every, args.total_epochs, args.batch_size, args), nprocs=world_size)
+    mp.spawn(main, args=(world_size, args.sampling_freq, args.total_epochs, args.batch_size, args), nprocs=world_size)
 

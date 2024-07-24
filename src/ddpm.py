@@ -1,3 +1,9 @@
+"""
+Created on Fri Jul  5, 2024
+
+@author: ben
+"""
+
 import torch
 import torch.nn as nn
 from typing import Dict, Tuple
@@ -10,7 +16,7 @@ class DDPM(nn.Module):
         betas: Tuple[float, float],
         n_T: int,
         criterion: nn.Module = nn.MSELoss(),
-        ) -> None:
+    ) -> None:
         super(DDPM, self).__init__()
         
         
