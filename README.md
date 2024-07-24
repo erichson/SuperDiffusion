@@ -1,1 +1,1 @@
-# flowSRDiff
+## A Minimalistic Diffusion Model for Super-resolutionRun the code for upsacling the NSTK flow by a factor of 16:```python trainSR_nstk.py  --factor 16```
