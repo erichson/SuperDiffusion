@@ -56,7 +56,7 @@ class DDPM(nn.Module):
                                                                        size=[snapshots_i.shape[2], snapshots_i.shape[3]], 
                                                                        mode='bicubic')
 
-        # This samples accordingly to Algorithm 2.
+        # Let's sample
         for i in range(self.n_T, 0, -1):
             z = torch.randn(n_sample, *size).to(device) if i > 1 else 0
             eps = self.eps_model(snapshots_i, torch.tensor(i / self.n_T).to(device).repeat(n_sample), lowres_snapshot=conditioning_snapshots_interpolated)
