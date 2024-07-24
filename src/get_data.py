@@ -46,9 +46,12 @@ class NSTK_SR(torch.utils.data.Dataset):
     def __getitem__(self, index):
         if not hasattr(self, 'dataset'):
             self.open_hdf5()
-        hr_img = torch.from_numpy(self.dataset[index, :, 0:1024:2, 0:1024:2]).float() # 512 x 512
+        if index < 1000:
+            hr_img = torch.from_numpy(self.dataset[index, :, 0:1024:2, 0:1024:2]).float() # 512 x 512
+        else:
+            hr_img = torch.from_numpy(self.dataset[index-1000, :, 1024:2048:2, 1024:2048:2]).float() # 512 x 512
         lr_img = hr_img[:, ::self.factor, ::self.factor]
         return lr_img, hr_img
 
     def __len__(self):
-        return self.length        
+        return self.length * 2     
