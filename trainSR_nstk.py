@@ -32,7 +32,7 @@ def ddp_setup(rank, world_size):
         world_size: Total number of processes
     """
     os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "55234"
+    os.environ["MASTER_PORT"] = "33421"
     init_process_group(backend="nccl", rank=rank, world_size=world_size)
     torch.cuda.set_device(rank)
 
@@ -77,7 +77,9 @@ class Trainer:
 
     def _save_checkpoint(self, epoch):
         ckp = self.model.module.state_dict()
-        PATH = "checkpoint.pt"
+        if not os.path.exists("./checkpoints"):
+                os.makedirs("./checkpoints")
+        PATH = "./checkpoints/" + "checkpoint_" + self.run_name + ".pt"
         torch.save(ckp, PATH)
         print(f"Epoch {epoch} | Training checkpoint saved at {PATH}")
 
@@ -94,7 +96,7 @@ class Trainer:
             source, target = next(iter(self.train_data))
             source = source.to('cuda')
             
-            samples = self.model.module.sample(4, (1, 512, 512), source, 'cuda')
+            samples = self.model.module.sample(4, (1, 1024, 1024), source, 'cuda')
             
             nrow = 3; ncol = 4;
             f, axarr = plt.subplots(nrow, ncol, figsize=(12, 8))
@@ -105,11 +107,13 @@ class Trainer:
                axarr[0,i].set_yticks([])
                axarr[0,i].title.set_text("LR input")  
 
-            for i in range(ncol): 
-               axarr[1,i].imshow(samples[i,0,:,:].cpu().detach().numpy(), cmap=cmocean.cm.balance)
+            for i in range(ncol):
+               img = samples[i,0,:,:].cpu().detach().numpy() 
+               axarr[1,i].imshow(img, cmap=cmocean.cm.balance)
                axarr[1,i].set_xticks([])
                axarr[1,i].set_yticks([])
-               axarr[1,i].title.set_text("Super-resolved")  
+               error = np.linalg.norm(img - target[i,0,:,:].cpu().detach().numpy()) / np.linalg.norm(target[i,0,:,:].cpu().detach().numpy())
+               axarr[1,i].title.set_text(f"Super-resolved (RFNE={error:.3f})")  
 
             for i in range(ncol): 
                axarr[2,i].imshow(target[i,0,:,:].cpu().detach().numpy(), cmap=cmocean.cm.balance)
@@ -127,7 +131,7 @@ class Trainer:
         
         self.lr_scheduler = scheduler(
             optimizer=self.optimizer,
-            num_warmup_steps=len(self.train_data) * 1, # we need only a very shot warmup phase for our data
+            num_warmup_steps=len(self.train_data) * 5, # we need only a very shot warmup phase for our data
             num_training_steps=(len(self.train_data) * max_epochs),
         )
         #print(len(self.train_data))
@@ -140,12 +144,14 @@ class Trainer:
             
             if self.gpu_id == 0:
                 avg_loss = np.mean(loss_values)
-                print(f"Epoch {epoch} | loss {avg_loss}")
-                self.run.log({"loss": avg_loss, "learning rate": self.lr_scheduler.get_last_lr()})
+                print(f"Epoch {epoch} | loss {avg_loss} | learning rate {self.lr_scheduler.get_last_lr()}")
+                self.run.log({"loss": avg_loss})
 
             
-            #if self.gpu_id == 0 and epoch == 0:
-            #    self._save_checkpoint(epoch)
+            if self.gpu_id == 0 and epoch == 0:
+                self._save_checkpoint(epoch+1)
+                self._generate_samples(epoch+1)
+
             
             if self.gpu_id == 0 and (epoch + 1) % self.sampling_freq == 0:
                 self._save_checkpoint(epoch+1)
@@ -154,7 +160,7 @@ class Trainer:
 
 def load_train_objs(superres, args):
     train_set = NSTK(path='16000_2048_2048_seed_3407_w.h5', factor=args.factor)  # load your dataset
-    unet_model = UNet(image_size=512, in_channels=1, out_channels=1, lowres_cond=args.superres) # load your model
+    unet_model = UNet(image_size=1024, in_channels=1, out_channels=1, lowres_cond=args.superres) # load your model
     model = GaussianDiffusionModel(eps_model=unet_model.cuda(), betas=(1e-4, 0.02), n_T=1000)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     return train_set, model, optimizer
@@ -202,7 +208,7 @@ if __name__ == "__main__":
     parser.add_argument('--superres', default=True, type=bool, help='Superresolution')
     parser.add_argument('--factor', default=4, type=int, help='upsampling factor')
 
-    parser.add_argument('--learning-rate', default=1e-4, type=int, help='learning rate')
+    parser.add_argument('--learning-rate', default=2e-4, type=int, help='learning rate')
     
     
     args = parser.parse_args()
