@@ -823,19 +823,16 @@ def UNet(
         channel_mult = (1, 1, 2, 3, 4)
 
     elif image_size == 512:
-        channel_mult = (1, 1, 2, 3)
+        channel_mult = (1,2,3) #(1, 1, 2, 2, 2)
 
     elif image_size == 1024:
-        channel_mult = (1, 1, 2, 2)
+        channel_mult = (1, 2, 3)
 
     else:
         raise ValueError(f"unsupported image size: {image_size}")
 
     attention_ds = []
-    if image_size == 28:
-        attention_resolutions = "28,14,7"
-    else:
-        attention_resolutions = "32, 16, 8"
+    attention_resolutions = "32, 16, 8"
         
     for res in attention_resolutions.split(","):
         attention_ds.append(image_size // int(res))
@@ -845,9 +842,8 @@ def UNet(
         in_channels=in_channels,
         model_channels=base_width,
         out_channels=out_channels,
-        num_res_blocks=2,
+        num_res_blocks=1,
         attention_resolutions=tuple(attention_ds),
-        #time_emb_factor=2,
         dropout=0.1,
         channel_mult=channel_mult,
         num_classes=num_classes,

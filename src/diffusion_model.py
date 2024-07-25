@@ -44,7 +44,7 @@ class GaussianDiffusionModel(nn.Module):
         if conditioning_snapshots is not None:
             conditioning_snapshots_interpolated = nn.functional.interpolate(conditioning_snapshots, 
                                                                         size=[snapshots.shape[2], snapshots.shape[3]], 
-                                                                        mode='bicubic')
+                                                                        mode='bilinear')
         else:
             conditioning_snapshots_interpolated = None
 
@@ -64,7 +64,7 @@ class GaussianDiffusionModel(nn.Module):
         if conditioning_snapshots is not None:
             conditioning_snapshots_interpolated = nn.functional.interpolate(conditioning_snapshots[0:snapshots_i.shape[0]], 
                                                                        size=[snapshots_i.shape[2], snapshots_i.shape[3]], 
-                                                                       mode='bicubic')
+                                                                       mode='bilinear')
 
         for i in range(self.n_T, 0, -1):
             z = torch.randn(n_sample, *size).to(device) if i > 1 else 0
