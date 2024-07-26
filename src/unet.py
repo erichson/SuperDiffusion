@@ -820,13 +820,13 @@ def UNet(
 ):
 
     if image_size == 256:
-        channel_mult = (1, 1, 2, 3, 4)
+        channel_mult = (1, 2, 4, 8)
 
     elif image_size == 512:
         channel_mult = (1,2,3) #(1, 1, 2, 2, 2)
 
     elif image_size == 1024:
-        channel_mult = (1, 2, 3)
+        channel_mult = (1, 2, 2)
 
     else:
         raise ValueError(f"unsupported image size: {image_size}")
@@ -842,15 +842,15 @@ def UNet(
         in_channels=in_channels,
         model_channels=base_width,
         out_channels=out_channels,
-        num_res_blocks=1,
+        num_res_blocks=2,
         attention_resolutions=tuple(attention_ds),
-        dropout=0.1,
+        dropout=0.15,
         channel_mult=channel_mult,
         num_classes=num_classes,
         use_checkpoint=False,
         use_fp16=False,
-        num_heads=4,
-        num_head_channels=32,
+        num_heads=8,
+        num_head_channels=64,
         num_heads_upsample=-1,
         use_scale_shift_norm=True,
         resblock_updown=True,
