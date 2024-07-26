@@ -54,16 +54,26 @@ class NSTK_SR(torch.utils.data.Dataset):
             index = index * 2 + 1
     
         if index < 1000:
-            hr_img = torch.from_numpy(self.dataset[index, :, 0:1024, 0:1024]).float() # 512 x 512
+            hr_img = torch.from_numpy(self.dataset[index, :, 0:256, 0:256]).float() # 256 x 256
         elif index < 2000:
-            hr_img = torch.from_numpy(self.dataset[index-1000, :, 0:1024, 1024:2048]).float() # 512 x 512
+            hr_img = torch.from_numpy(self.dataset[index-1000, :, 0:256, 256:512]).float() # 256 x 256
         elif index < 3000:
-            hr_img = torch.from_numpy(self.dataset[index-2000, :, 1024:2048, 0:1024]).float() # 512 x 512
+            hr_img = torch.from_numpy(self.dataset[index-2000, :, 256:512, 0:256]).float() # 256 x 256
         elif index < 4000:
-            hr_img = torch.from_numpy(self.dataset[index-3000, :, 1024:2048, 1024:2048]).float() # 512 x 512            
+            hr_img = torch.from_numpy(self.dataset[index-3000, :, 256:512, 256:512]).float() # 256 x 256            
+        elif index < 5000:
+            hr_img = torch.from_numpy(self.dataset[index-4000, :, 1792:2048, 1792:2048]).float() # 256 x 256            
+        elif index < 6000:
+            hr_img = torch.from_numpy(self.dataset[index-5000, :, 1792:2048, 256:512]).float() # 256 x 256            
+        elif index < 7000:
+            hr_img = torch.from_numpy(self.dataset[index-6000, :, 256:512, 1792:2048]).float() # 256 x 256            
+        elif index < 8000:
+            hr_img = torch.from_numpy(self.dataset[index-7000, :, 512:768, 512:768]).float() # 256 x 256            
+                                                             
+            
             
         lr_img = hr_img[:, ::self.factor, ::self.factor]
         return lr_img, hr_img
 
     def __len__(self):
-        return  1999 #self.length   
+        return  4000 #self.length   
