@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt
 import cmocean
 
 from src.unet import UNet
-from src.diffusion_model import GaussianDiffusionModel
+from src.diffusion_model import GaussianDiffusionModelSR
 from src.get_data import NSTK_SR as NSTK
 
 
@@ -32,7 +32,7 @@ def ddp_setup(rank, world_size):
         world_size: Total number of processes
     """
     os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "33421"
+    os.environ["MASTER_PORT"] = "3522"
     init_process_group(backend="nccl", rank=rank, world_size=world_size)
     torch.cuda.set_device(rank)
 
@@ -69,10 +69,10 @@ class Trainer:
     def _run_epoch(self, epoch):
         self.train_data.sampler.set_epoch(epoch)
         loss_values = []
-        for condining_snapshot, targets in self.train_data:
-            condining_snapshot = condining_snapshot.to(self.gpu_id)
+        for condining_snapshots, targets in self.train_data:
+            condining_snapshots = condining_snapshots.to(self.gpu_id)
             targets = targets.to(self.gpu_id)            
-            loss_values.append(self._run_batch(targets, condining_snapshot))
+            loss_values.append(self._run_batch(targets, condining_snapshots))
         return loss_values
 
     def _save_checkpoint(self, epoch):
@@ -93,30 +93,31 @@ class Trainer:
             
             
             self.train_data.sampler.set_epoch(1)
-            source, target = next(iter(self.train_data))
-            source = source.to('cuda')
+            conditioning_snapshots, targets = next(iter(self.train_data))
+            conditioning_snapshots = conditioning_snapshots.to('cuda')
             
-            samples = self.model.module.sample(4, (1, 1024, 1024), source, 'cuda')
+            samples = self.model.module.sample(4, (1, 256, 256), conditioning_snapshots, 'cuda')
+                     
             
             nrow = 3; ncol = 4;
             f, axarr = plt.subplots(nrow, ncol, figsize=(12, 8))
 
             for i in range(ncol): 
-               axarr[0,i].imshow(source[i,0,:,:].cpu().detach().numpy(), cmap=cmocean.cm.balance)
+               axarr[0,i].imshow(conditioning_snapshots[i,0,:,:].cpu().detach().numpy(), cmap=cmocean.cm.balance)
                axarr[0,i].set_xticks([])
                axarr[0,i].set_yticks([])
                axarr[0,i].title.set_text("LR input")  
 
             for i in range(ncol):
                img = samples[i,0,:,:].cpu().detach().numpy() 
+               error = np.linalg.norm(img - targets[i,0,:,:].cpu().detach().numpy()) / np.linalg.norm(targets[i,0,:,:].cpu().detach().numpy())
                axarr[1,i].imshow(img, cmap=cmocean.cm.balance)
                axarr[1,i].set_xticks([])
                axarr[1,i].set_yticks([])
-               error = np.linalg.norm(img - target[i,0,:,:].cpu().detach().numpy()) / np.linalg.norm(target[i,0,:,:].cpu().detach().numpy())
                axarr[1,i].title.set_text(f"Super-resolved (RFNE={error:.3f})")  
 
             for i in range(ncol): 
-               axarr[2,i].imshow(target[i,0,:,:].cpu().detach().numpy(), cmap=cmocean.cm.balance)
+               axarr[2,i].imshow(targets[i,0,:,:].cpu().detach().numpy(), cmap=cmocean.cm.balance)
                axarr[2,i].set_xticks([])
                axarr[2,i].set_yticks([])
                axarr[2,i].title.set_text("HR Ground Truth")                 
@@ -160,8 +161,9 @@ class Trainer:
 
 def load_train_objs(superres, args):
     train_set = NSTK(path='16000_2048_2048_seed_3407_w.h5', factor=args.factor)  # load your dataset
-    unet_model = UNet(image_size=1024, in_channels=1, out_channels=1, lowres_cond=args.superres) # load your model
-    model = GaussianDiffusionModel(eps_model=unet_model.cuda(), betas=(1e-4, 0.02), n_T=1000)
+    unet_model = UNet(image_size=256, in_channels=1, out_channels=1, lowres_cond=args.superres) # load your model
+    model = GaussianDiffusionModelSR(eps_model=unet_model.cuda(), betas=(1e-4, 0.02), n_T=1000)
+    
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     return train_set, model, optimizer
 
@@ -202,7 +204,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Minimalistic Diffusion Model for Super-resolution')
     parser.add_argument("--run-name", type=str, default='run1', help="Name of the current run.")
     parser.add_argument('--epochs', default=500, type=int, help='Total epochs to train the model')
-    parser.add_argument('--sampling-freq', default=50, type=int, help='How often to save a snapshot')
+    parser.add_argument('--sampling-freq', default=20, type=int, help='How often to save a snapshot')
     parser.add_argument('--batch-size', default=16, type=int, help='Input batch size on each device (default: 32)')
 
     parser.add_argument('--superres', default=True, type=bool, help='Superresolution')
