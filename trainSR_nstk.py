@@ -17,12 +17,12 @@ from torch.distributed import init_process_group, destroy_process_group
 
 from diffusers.optimization import get_linear_schedule_with_warmup as scheduler
 
-import matplotlib.pyplot as plt
-import cmocean
+
 
 from src.unet import UNet
 from src.diffusion_model import GaussianDiffusionModelSR
 from src.get_data import NSTK_SR as NSTK
+from src.plotting import plot_samples
 
 
 def ddp_setup(rank, world_size):
@@ -56,9 +56,9 @@ class Trainer:
         self.run = run
         self.run_name = run_name
 
-    def _run_batch(self, targets, condining_snapshot):
+    def _run_batch(self, targets, conditioning_snapshots):
         self.optimizer.zero_grad()
-        loss = self.model(targets, condining_snapshot)
+        loss = self.model(targets, conditioning_snapshots)
         loss.backward()
         self.optimizer.step()
         self.lr_scheduler.step()
@@ -69,10 +69,10 @@ class Trainer:
     def _run_epoch(self, epoch):
         self.train_data.sampler.set_epoch(epoch)
         loss_values = []
-        for condining_snapshots, targets in self.train_data:
-            condining_snapshots = condining_snapshots.to(self.gpu_id)
+        for conditioning_snapshots, targets in self.train_data:
+            conditioning_snapshots = conditioning_snapshots.to(self.gpu_id)
             targets = targets.to(self.gpu_id)            
-            loss_values.append(self._run_batch(targets, condining_snapshots))
+            loss_values.append(self._run_batch(targets, conditioning_snapshots))
         return loss_values
 
     def _save_checkpoint(self, epoch):
@@ -99,32 +99,7 @@ class Trainer:
             samples = self.model.module.sample(4, (1, 256, 256), conditioning_snapshots, 'cuda')
                      
             
-            nrow = 3; ncol = 4;
-            f, axarr = plt.subplots(nrow, ncol, figsize=(12, 8))
-
-            for i in range(ncol): 
-               axarr[0,i].imshow(conditioning_snapshots[i,0,:,:].cpu().detach().numpy(), cmap=cmocean.cm.balance)
-               axarr[0,i].set_xticks([])
-               axarr[0,i].set_yticks([])
-               axarr[0,i].title.set_text("LR input")  
-
-            for i in range(ncol):
-               img = samples[i,0,:,:].cpu().detach().numpy() 
-               error = np.linalg.norm(img - targets[i,0,:,:].cpu().detach().numpy()) / np.linalg.norm(targets[i,0,:,:].cpu().detach().numpy())
-               axarr[1,i].imshow(img, cmap=cmocean.cm.balance)
-               axarr[1,i].set_xticks([])
-               axarr[1,i].set_yticks([])
-               axarr[1,i].title.set_text(f"Super-resolved (RFNE={error:.3f})")  
-
-            for i in range(ncol): 
-               axarr[2,i].imshow(targets[i,0,:,:].cpu().detach().numpy(), cmap=cmocean.cm.balance)
-               axarr[2,i].set_xticks([])
-               axarr[2,i].set_yticks([])
-               axarr[2,i].title.set_text("HR Ground Truth")                 
-
-            plt.tight_layout()
-            plt.savefig(PATH + "/ddpm_sample_"+ str(epoch) + ".png")
-            plt.close()
+        plot_samples(samples, conditioning_snapshots, targets, PATH, epoch)
         print(f"Epoch {epoch} | Generated samples saved at {PATH}")
 
 
@@ -162,7 +137,8 @@ class Trainer:
 def load_train_objs(superres, args):
     train_set = NSTK(path='16000_2048_2048_seed_3407_w.h5', factor=args.factor)  # load your dataset
     unet_model = UNet(image_size=256, in_channels=1, out_channels=1, lowres_cond=args.superres) # load your model
-    model = GaussianDiffusionModelSR(eps_model=unet_model.cuda(), betas=(1e-4, 0.02), n_T=1000)
+    model = GaussianDiffusionModelSR(eps_model=unet_model.cuda(), betas=(1e-4, 0.02),
+                                   n_T=args.time_steps, prediction_type = args.prediction_type, sampler = args.sampler)
     
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     return train_set, model, optimizer
@@ -179,6 +155,10 @@ def prepare_dataloader(dataset: Dataset, batch_size: int):
 
 
 def main(rank: int, world_size: int, sampling_freq: int, epochs: int, batch_size: int, run, args):
+    
+    #print(rank)
+    #print(world_size)
+    
     ddp_setup(rank, world_size)
     dataset, model, optimizer = load_train_objs(superres=args.superres, args=args)
     
@@ -211,8 +191,11 @@ if __name__ == "__main__":
     parser.add_argument('--factor', default=4, type=int, help='upsampling factor')
 
     parser.add_argument('--learning-rate', default=2e-4, type=int, help='learning rate')
-    
-    
+
+    parser.add_argument("--prediction-type", type=str, default='v', help="Quantity to predict during training.")
+    parser.add_argument("--sampler", type=str, default='ddim', help="Sampler to use to generate images")    
+    parser.add_argument("--time-steps", type=int, default=1000, help="Time steps for sampling")    
+
     args = parser.parse_args()
 
     # Launch processes.
