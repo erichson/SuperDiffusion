@@ -96,7 +96,9 @@ class Trainer:
             conditioning_snapshots, targets = next(iter(self.train_data))
             conditioning_snapshots = conditioning_snapshots.to('cuda')
             
-            samples = self.model.module.sample(4, (1, 256, 256), conditioning_snapshots, 'cuda')
+            samples = self.model.module.sample(conditioning_snapshots.shape[0], 
+                                               (1, targets.shape[2], targets.shape[3]), 
+                                               conditioning_snapshots, 'cuda')
                      
             
         plot_samples(samples, conditioning_snapshots, targets, PATH, epoch)

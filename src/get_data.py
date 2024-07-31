@@ -53,6 +53,7 @@ class NSTK_SR(torch.utils.data.Dataset):
         else:
             index = index * 2 + 1
     
+        #print(index)
         if index < 1000:
             hr_img = torch.from_numpy(self.dataset[index, :, 0:256, 0:256]).float() # 256 x 256
         elif index < 2000:

@@ -115,6 +115,7 @@ class GaussianDiffusionModelSR(nn.Module):
 
 
         elif self.sampler == 'ddim':
+
             for time_step in range(self.n_T, 0, -1):
                 time = torch.ones((n_sample,) ) * time_step / self.n_T
                 logsnr, alpha, sigma = get_logsnr_alpha_sigma(time.to(device))
