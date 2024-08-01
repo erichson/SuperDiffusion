@@ -596,7 +596,9 @@ class UNetModel(nn.Module):
         use_scale_shift_norm=False,
         resblock_updown=False,
         use_new_attention_order=False,
-        lowres_cond = False,
+        superres = False,
+        forecast = False,
+        num_pred_steps = None
     ):
         super().__init__()
 
@@ -604,7 +606,15 @@ class UNetModel(nn.Module):
             num_heads_upsample = num_heads
 
         self.image_size = image_size
-        self.in_channels = in_channels * (2 if lowres_cond else 1)
+        
+        if forecast:
+            mult = 3
+        elif superres:
+            mult = 2
+        else:
+            mult = 1
+        
+        self.in_channels = in_channels * mult
         self.model_channels = model_channels
         self.out_channels = out_channels
         self.num_res_blocks = num_res_blocks
@@ -618,9 +628,11 @@ class UNetModel(nn.Module):
         self.num_heads = num_heads
         self.num_head_channels = num_head_channels
         self.num_heads_upsample = num_heads_upsample
-        self.lowres_cond = lowres_cond
+        self.superres = superres
+        self.forecast = forecast
+        self.num_pred_steps = num_pred_steps
 
-        time_embed_dim = model_channels * 4 * (2 if lowres_cond else 1)
+        time_embed_dim = model_channels * 4 * mult
         
                 
         self.time_embed = nn.Sequential(
@@ -631,6 +643,10 @@ class UNetModel(nn.Module):
 
         if self.num_classes is not None:
             self.label_emb = nn.Embedding(num_classes, time_embed_dim)
+            
+        if self.num_pred_steps is not None:
+            self.pred_steps_emb = nn.Embedding(num_pred_steps, time_embed_dim)
+            
 
         ch = input_ch = int(channel_mult[0] * model_channels)
         self.input_blocks = nn.ModuleList(
@@ -774,7 +790,7 @@ class UNetModel(nn.Module):
 
 
 
-    def forward(self, x, timesteps, y=None, lowres_snapshot=None):
+    def forward(self, x, timesteps, lowres_snapshot=None, past_snapshot=None, s=None, y=None):
         """
         Apply the model to an input batch.
 
@@ -787,15 +803,27 @@ class UNetModel(nn.Module):
             self.num_classes is not None
         ), "must specify y if and only if the model is class-conditional"
 
+        assert (s is not None) == (
+            self.num_pred_steps is not None
+        ), "must specify the number of different prediction steps if and only if the model is time step conditional"
+
+
         hs = []
         emb = self.time_embed(timestep_embedding(timesteps, self.model_channels))
 
         if lowres_snapshot is not None:
             x = th.cat([x, lowres_snapshot], dim=1)
-
+            
+        if past_snapshot is not None: 
+            x = th.cat([x, past_snapshot], dim=1)
+                        
         if self.num_classes is not None:
             assert y.shape == (x.shape[0],)
             emb = emb + self.label_emb(y)
+            
+        if self.num_pred_steps is not None:
+            assert s.shape == (x.shape[0],)
+            emb = emb + self.pred_steps_emb(s)            
             
         h = x.type(self.dtype)
         for module in self.input_blocks:
@@ -810,23 +838,28 @@ class UNetModel(nn.Module):
 
 
 
+
+
 def UNet(
     image_size,
     in_channels=1,
     out_channels=1,
     base_width=64,
     num_classes=None,
-    lowres_cond=False,
+    superres=False,
+    forecast=False,
+    num_pred_steps=None,
+
 ):
 
     if image_size == 256:
         channel_mult = (1, 2, 4, 8)
 
     elif image_size == 512:
-        channel_mult = (1,2,3) #(1, 1, 2, 2, 2)
+        channel_mult = (1, 2, 4, 8)
 
     elif image_size == 1024:
-        channel_mult = (1, 2, 2)
+        channel_mult = (1, 2, 4)
 
     else:
         raise ValueError(f"unsupported image size: {image_size}")
@@ -855,5 +888,7 @@ def UNet(
         use_scale_shift_norm=True,
         resblock_updown=True,
         use_new_attention_order=True,
-        lowres_cond=lowres_cond
+        superres=superres,
+        forecast=forecast,
+        num_pred_steps=num_pred_steps,
     )
