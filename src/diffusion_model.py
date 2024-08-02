@@ -153,6 +153,7 @@ class GaussianDiffusionModelCast(nn.Module):
         n_T: int,
         prediction_type: str,
         sampler:str,
+        ema_val = 0.999,
         criterion: nn.Module = nn.MSELoss(),
     ) -> None:
         super(GaussianDiffusionModelCast, self).__init__()
@@ -164,7 +165,7 @@ class GaussianDiffusionModelCast(nn.Module):
 
         
         self.eps_model = eps_model
-
+        self.ema = ExponentialMovingAverage(self.eps_model.parameters(), decay=ema_val)
         # register_buffer allows us to freely access these tensors by name. It helps device placement.
         for k, v in ddpm_schedules(betas[0], betas[1], n_T).items():
             self.register_buffer(k, v)
