@@ -64,6 +64,7 @@ class Trainer:
         loss.backward()
         self.optimizer.step()
         self.lr_scheduler.step()
+        self.model.module.ema.update()
         loss_value = loss.item()
         return loss_value
         
@@ -82,6 +83,9 @@ class Trainer:
 
     def _save_checkpoint(self, epoch):
         ckp = self.model.module.state_dict()
+        if 'ema' not in ckp:
+            ckp['ema'] = self.model.module.ema.state_dict(),
+
         if not os.path.exists("./checkpoints"):
                 os.makedirs("./checkpoints")
         PATH = "./checkpoints/" + "checkpoint_" + self.run_name + ".pt"
@@ -90,21 +94,22 @@ class Trainer:
 
     
     def _generate_samples(self, epoch):
-        self.model.eval()
-        with torch.no_grad():
-            PATH = "./train_samples_" + self.run_name
-            if not os.path.exists(PATH):
-                os.makedirs(PATH)
+        with self.model.module.ema.average_parameters():
+            self.model.eval()
+            with torch.no_grad():
+                PATH = "./train_samples_" + self.run_name
+                if not os.path.exists(PATH):
+                    os.makedirs(PATH)
+                    
             
-            
-            self.train_data.sampler.set_epoch(1)
-            conditioning_lr_snapshots, past_snapshots, targets, s = next(iter(self.train_data))
-            conditioning_lr_snapshots = conditioning_lr_snapshots.to('cuda')
-            past_snapshots = past_snapshots.to('cuda')
-            s = s.to('cuda')
+                self.train_data.sampler.set_epoch(1)
+                conditioning_lr_snapshots, past_snapshots, targets, s = next(iter(self.train_data))
+                conditioning_lr_snapshots = conditioning_lr_snapshots.to('cuda')
+                past_snapshots = past_snapshots.to('cuda')
+                s = s.to('cuda')
 
             
-            samples = self.model.module.sample(targets.shape[0], (1, targets.shape[2], targets.shape[3]), 
+                samples = self.model.module.sample(targets.shape[0], (1, targets.shape[2], targets.shape[3]), 
                                                conditioning_lr_snapshots, past_snapshots, s,'cuda')
                      
             
