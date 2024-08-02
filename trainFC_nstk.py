@@ -35,7 +35,7 @@ def ddp_setup(rank, world_size):
     """
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = "3522"
-    init_process_group(backend="gloo", rank=rank, world_size=world_size) #gloo or nccl
+    init_process_group(backend="nccl", rank=rank, world_size=world_size) #gloo or nccl
     torch.cuda.set_device(rank)
 
 class Trainer:

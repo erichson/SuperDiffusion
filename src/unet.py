@@ -853,7 +853,7 @@ def UNet(
 ):
 
     if image_size == 256:
-        channel_mult = (1, 2, 4, 6, 8)
+        channel_mult = (1, 2, 4, 8)
 
     elif image_size == 512:
         channel_mult = (1, 2, 4, 8)

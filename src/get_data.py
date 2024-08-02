@@ -84,12 +84,13 @@ class NSTK_SR(torch.utils.data.Dataset):
     
     
 class NSTK_Cast(torch.utils.data.Dataset):
-    def __init__(self, path, factor, num_pred_steps=1, train=True):
+    def __init__(self, path, factor, num_pred_steps=1, patch_size=256, train=True):
         super(NSTK_Cast, self).__init__()
         self.path = path
         self.factor = factor
         self.num_pred_steps = num_pred_steps
         self.train = train
+        self.patch_size = patch_size
         with h5py.File(self.path, 'r') as f:
             self.length = len(f['w'])        
         
@@ -101,60 +102,43 @@ class NSTK_Cast(torch.utils.data.Dataset):
         if not hasattr(self, 'dataset'):
             self.open_hdf5()
             
+        index = index // 20            
+            
         if self.train:    
             index = index * 2
         else:
             index = index * 2 + 1
     
-        flag = False
-        if index > 7200:
-            index -= 7200
-            flag = True
-        
-        shift = np.random.randint(0, self.num_pred_steps, 1)[0]
     
-        #print(index)
-        if index < 900:
-            patch = torch.from_numpy(self.dataset[index, :, 0:256, 0:256]).float() # 256 x 256
-            target = torch.from_numpy(self.dataset[index+shift, :, 0:256, 0:256]).float() # 256 x 256
-
-        elif index < 1800:
-            patch = torch.from_numpy(self.dataset[index-900, :, 0:256, 256:512]).float() # 256 x 256
-            target = torch.from_numpy(self.dataset[index-900+shift, :, 0:256, 256:512]).float() # 256 x 256
-
-        elif index < 2700:
-            patch = torch.from_numpy(self.dataset[index-1800, :, 256:512, 0:256]).float() # 256 x 256
-            target = torch.from_numpy(self.dataset[index-1800+shift, :, 256:512, 0:256]).float() # 256 x 256
-
-        elif index < 3600:
-            patch = torch.from_numpy(self.dataset[index-2700, :, 256:512, 256:512]).float() # 256 x 256 
-            target = torch.from_numpy(self.dataset[index-2700+shift, :, 256:512, 256:512]).float() # 256 x 256            
-
-        elif index < 4500:
-            patch = torch.from_numpy(self.dataset[index-3600, :, 1792:2048, 1792:2048]).float() # 256 x 256 
-            target = torch.from_numpy(self.dataset[index-3600+shift, :, 1792:2048, 1792:2048]).float() # 256 x 256            
-
-        elif index < 5400:
-            patch = torch.from_numpy(self.dataset[index-4500, :, 1792:2048, 256:512]).float() # 256 x 256     
-            target = torch.from_numpy(self.dataset[index-4500+shift, :, 1792:2048, 256:512]).float() # 256 x 256            
-
-        elif index < 6300:
-            patch = torch.from_numpy(self.dataset[index-5400, :, 256:512, 1792:2048]).float() # 256 x 256      
-            target = torch.from_numpy(self.dataset[index-5400+shift, :, 256:512, 1792:2048]).float() # 256 x 256            
-
-        elif index <= 7200:
-            patch = torch.from_numpy(self.dataset[index-6300, :, 512:768, 512:768]).float() # 256 x 256   
-            target = torch.from_numpy(self.dataset[index-6300+shift, :, 512:768, 512:768]).float() # 256 x 256            
-
-                                                             
-        if flag:
-            lr_patch = target[:, ::self.factor, ::self.factor]
-            return lr_patch * 0, patch, target, torch.tensor(shift)
+        superres = np.random.choice([True,False], size=1)[0]
+        
+        if superres:
+            shift = np.random.randint(0, self.num_pred_steps, 1)[0]
         else:
-            lr_patch = target[:, ::self.factor, ::self.factor]
+            shift = np.random.randint(1, self.num_pred_steps, 1)[0]
+            
+    
+        # Randomly select a patch from the image
+        max_row = 2048 - self.patch_size
+        max_col = 2048 - self.patch_size
+        patch_row = np.random.randint(0, max_row)
+        patch_col = np.random.randint(0, max_col)
+        
+        patch = self.dataset[index, :, patch_row:patch_row + self.patch_size, patch_col:patch_col + self.patch_size]
+        patch = torch.from_numpy(patch).float()
+
+        target = self.dataset[index + shift, :, patch_row:patch_row + self.patch_size, patch_col:patch_col + self.patch_size]
+        target = torch.from_numpy(target).float()
+
+
+        if superres:
+            lr_patch = patch[:, ::self.factor, ::self.factor]
             return lr_patch, patch * 0, target, torch.tensor(shift)
+        else:
+            lr_patch = patch[:, ::self.factor, ::self.factor]
+            return lr_patch * 0, patch, target, torch.tensor(shift)
 
     def __len__(self):
-        return  7200 #self.length      
+        return  9000 #self.length      
     
     
