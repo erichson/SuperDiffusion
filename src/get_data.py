@@ -102,57 +102,59 @@ class NSTK_Cast(torch.utils.data.Dataset):
             self.open_hdf5()
             
         if self.train:    
-            index = index * 4
+            index = index * 2
         else:
-            index = index * 4 + 1
+            index = index * 2 + 1
     
         flag = False
-        shift = 0
         if index > 7200:
             index -= 7200
             flag = True
-            shift = np.random.randint(1, self.num_pred_steps, 1)[0]
+        
+        shift = np.random.randint(0, self.num_pred_steps, 1)[0]
     
         #print(index)
         if index < 900:
             patch = torch.from_numpy(self.dataset[index, :, 0:256, 0:256]).float() # 256 x 256
-            patch_shifted = torch.from_numpy(self.dataset[index+shift, :, 0:256, 0:256]).float() # 256 x 256
+            target = torch.from_numpy(self.dataset[index+shift, :, 0:256, 0:256]).float() # 256 x 256
 
         elif index < 1800:
             patch = torch.from_numpy(self.dataset[index-900, :, 0:256, 256:512]).float() # 256 x 256
-            patch_shifted = torch.from_numpy(self.dataset[index-900+shift, :, 0:256, 256:512]).float() # 256 x 256
+            target = torch.from_numpy(self.dataset[index-900+shift, :, 0:256, 256:512]).float() # 256 x 256
 
         elif index < 2700:
             patch = torch.from_numpy(self.dataset[index-1800, :, 256:512, 0:256]).float() # 256 x 256
-            patch_shifted = torch.from_numpy(self.dataset[index-1800+shift, :, 256:512, 0:256]).float() # 256 x 256
+            target = torch.from_numpy(self.dataset[index-1800+shift, :, 256:512, 0:256]).float() # 256 x 256
 
         elif index < 3600:
             patch = torch.from_numpy(self.dataset[index-2700, :, 256:512, 256:512]).float() # 256 x 256 
-            patch_shifted = torch.from_numpy(self.dataset[index-2700+shift, :, 256:512, 256:512]).float() # 256 x 256            
+            target = torch.from_numpy(self.dataset[index-2700+shift, :, 256:512, 256:512]).float() # 256 x 256            
 
         elif index < 4500:
             patch = torch.from_numpy(self.dataset[index-3600, :, 1792:2048, 1792:2048]).float() # 256 x 256 
-            patch_shifted = torch.from_numpy(self.dataset[index-3600+shift, :, 1792:2048, 1792:2048]).float() # 256 x 256            
+            target = torch.from_numpy(self.dataset[index-3600+shift, :, 1792:2048, 1792:2048]).float() # 256 x 256            
 
         elif index < 5400:
             patch = torch.from_numpy(self.dataset[index-4500, :, 1792:2048, 256:512]).float() # 256 x 256     
-            patch_shifted = torch.from_numpy(self.dataset[index-4500+shift, :, 1792:2048, 256:512]).float() # 256 x 256            
+            target = torch.from_numpy(self.dataset[index-4500+shift, :, 1792:2048, 256:512]).float() # 256 x 256            
 
         elif index < 6300:
             patch = torch.from_numpy(self.dataset[index-5400, :, 256:512, 1792:2048]).float() # 256 x 256      
-            patch_shifted = torch.from_numpy(self.dataset[index-5400+shift, :, 256:512, 1792:2048]).float() # 256 x 256            
+            target = torch.from_numpy(self.dataset[index-5400+shift, :, 256:512, 1792:2048]).float() # 256 x 256            
 
         elif index <= 7200:
             patch = torch.from_numpy(self.dataset[index-6300, :, 512:768, 512:768]).float() # 256 x 256   
-            patch_shifted = torch.from_numpy(self.dataset[index-6300+shift, :, 512:768, 512:768]).float() # 256 x 256            
+            target = torch.from_numpy(self.dataset[index-6300+shift, :, 512:768, 512:768]).float() # 256 x 256            
 
                                                              
         if flag:
-            lr_patch = patch[:, ::self.factor, ::self.factor]
-            return lr_patch * 0, patch, patch_shifted, torch.tensor(shift)
+            lr_patch = target[:, ::self.factor, ::self.factor]
+            return lr_patch * 0, patch, target, torch.tensor(shift)
         else:
-            lr_patch = patch[:, ::self.factor, ::self.factor]
-            return lr_patch, patch * 0, patch, torch.tensor(shift)
+            lr_patch = target[:, ::self.factor, ::self.factor]
+            return lr_patch, patch * 0, target, torch.tensor(shift)
 
     def __len__(self):
-        return  3600 #self.length      
+        return  7200 #self.length      
+    
+    

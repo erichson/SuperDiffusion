@@ -236,6 +236,7 @@ class GaussianDiffusionModelCast(nn.Module):
         if self.sampler == 'ddpm':  
             for i in range(self.n_T, 0, -1):
                 z = torch.randn(n_sample, *size).to(device) if i > 1 else 0
+                
                 alpha = self.sqrtab[i]
                 sigma = self.sqrtmab[i]
                 

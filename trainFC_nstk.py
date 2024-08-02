@@ -25,6 +25,8 @@ from src.get_data import NSTK_Cast as NSTK
 from src.plotting import plot_samples
 
 
+
+
 def ddp_setup(rank, world_size):
     """
     Args:
@@ -33,7 +35,7 @@ def ddp_setup(rank, world_size):
     """
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = "3522"
-    init_process_group(backend="gloo", rank=rank, world_size=world_size)
+    init_process_group(backend="gloo", rank=rank, world_size=world_size) #gloo or nccl
     torch.cuda.set_device(rank)
 
 class Trainer:
@@ -173,8 +175,8 @@ def prepare_dataloader(dataset: Dataset, batch_size: int):
 
 def main(rank: int, world_size: int, sampling_freq: int, epochs: int, batch_size: int, run, args):
     
-    #print(rank)
-    #print(world_size)
+    print(rank)
+    print(world_size)
     
     ddp_setup(rank, world_size)
     dataset, model, optimizer = load_train_objs(superres=args.superres, args=args)
@@ -210,7 +212,7 @@ if __name__ == "__main__":
 
     parser.add_argument('--factor', default=4, type=int, help='upsampling factor')
 
-    parser.add_argument('--learning-rate', default=3e-4, type=int, help='learning rate')
+    parser.add_argument('--learning-rate', default=2e-4, type=int, help='learning rate')
 
     parser.add_argument("--prediction-type", type=str, default='v', help="Quantity to predict during training.")
     parser.add_argument("--sampler", type=str, default='ddim', help="Sampler to use to generate images")    
@@ -237,4 +239,10 @@ if __name__ == "__main__":
     )
     
     world_size = torch.cuda.device_count()
+    print(world_size)
     mp.spawn(main, args=(world_size, args.sampling_freq, args.epochs, args.batch_size, run, args), nprocs=world_size)
+
+
+
+
+# export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7;  python trainFC_nstk.py  --factor 8 --batch-size 8 --run-name run_FC_ddim10 --sampler ddim --time-steps 10 --prediction-type v --num-pred-steps 4 
