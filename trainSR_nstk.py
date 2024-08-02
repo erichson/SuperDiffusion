@@ -62,6 +62,7 @@ class Trainer:
         loss.backward()
         self.optimizer.step()
         self.lr_scheduler.step()
+        self.model.module.ema.update()
         loss_value = loss.item()
         return loss_value
         
@@ -77,6 +78,8 @@ class Trainer:
 
     def _save_checkpoint(self, epoch):
         ckp = self.model.module.state_dict()
+        if 'ema' not in ckp:
+            ckp['ema'] = self.model.module.ema.state_dict(),
         if not os.path.exists("./checkpoints"):
                 os.makedirs("./checkpoints")
         PATH = "./checkpoints/" + "checkpoint_" + self.run_name + ".pt"
@@ -85,20 +88,21 @@ class Trainer:
 
     
     def _generate_samples(self, epoch):
-        self.model.eval()
-        with torch.no_grad():
-            PATH = "./train_samples_" + self.run_name
-            if not os.path.exists(PATH):
-                os.makedirs(PATH)
+        with self.model.module.ema.average_parameters():
+            self.model.eval()
+            with torch.no_grad():
+                PATH = "./train_samples_" + self.run_name
+                if not os.path.exists(PATH):
+                    os.makedirs(PATH)
             
             
-            self.train_data.sampler.set_epoch(1)
-            conditioning_snapshots, targets = next(iter(self.train_data))
-            conditioning_snapshots = conditioning_snapshots.to('cuda')
+                self.train_data.sampler.set_epoch(1)
+                conditioning_snapshots, targets = next(iter(self.train_data))
+                conditioning_snapshots = conditioning_snapshots.to('cuda')
             
-            samples = self.model.module.sample(conditioning_snapshots.shape[0], 
-                                               (1, targets.shape[2], targets.shape[3]), 
-                                               conditioning_snapshots, 'cuda')
+                samples = self.model.module.sample(conditioning_snapshots.shape[0], 
+                                                   (1, targets.shape[2], targets.shape[3]), 
+                                                   conditioning_snapshots, 'cuda')
                      
             
         plot_samples(samples, conditioning_snapshots, targets, PATH, epoch)
@@ -137,7 +141,9 @@ class Trainer:
 
 
 def load_train_objs(superres, args):
-    train_set = NSTK(path='data/16000_2048_2048_seed_3407_w.h5', factor=args.factor)
+    #train_set = NSTK(path='data/16000_2048_2048_seed_3407_w.h5', factor=args.factor)
+    train_set = NSTK(path='/pscratch/sd/v/vmikuni/FM/nskt_tensor/16000_2048_2048_seed_3407_w.h5', factor=args.factor)
+    
     unet_model = UNet(image_size=256, in_channels=1, out_channels=1, superres=args.superres) 
     model = GaussianDiffusionModelSR(eps_model=unet_model.cuda(), betas=(1e-4, 0.02),
                                    n_T=args.time_steps, prediction_type = args.prediction_type, sampler = args.sampler)
