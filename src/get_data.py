@@ -99,7 +99,7 @@ class NSTK_Cast(torch.utils.data.Dataset):
         if not hasattr(self, 'dataset'):
             self.open_hdf5()
             
-        index = index // 20            
+        index = index // 15            
             
         if self.train:    
             index = index * 2
@@ -107,7 +107,7 @@ class NSTK_Cast(torch.utils.data.Dataset):
             index = index * 2 + 1
     
     
-        superres = np.random.choice([True,False], size=1)[0]
+        superres = np.random.choice([True, False], size=1)[0]
         
         if superres:
             shift = np.random.randint(0, self.num_pred_steps, 1)[0]
@@ -116,15 +116,16 @@ class NSTK_Cast(torch.utils.data.Dataset):
             
     
         # Randomly select a patch from the image
-        max_row = 2048 - self.patch_size
-        max_col = 2048 - self.patch_size
-        patch_row = np.random.randint(0, max_row)
-        patch_col = np.random.randint(0, max_col)
+        stride = 128 # set to 64, 32 or 16 for more variation
+        max_row = (2048 - self.patch_size) // stride
+        max_col = (2048 - self.patch_size) // stride
+        patch_row = np.random.randint(0, max_row) * stride
+        patch_col = np.random.randint(0, max_col) * stride
         
-        patch = self.dataset[index, :, patch_row:patch_row + self.patch_size, patch_col:patch_col + self.patch_size]
+        patch = self.dataset[index, :, patch_row:(patch_row + self.patch_size), patch_col:(patch_col + self.patch_size)]
         patch = torch.from_numpy(patch).float()
 
-        target = self.dataset[index + shift, :, patch_row:patch_row + self.patch_size, patch_col:patch_col + self.patch_size]
+        target = self.dataset[index + shift, :, patch_row:(patch_row + self.patch_size), patch_col:(patch_col + self.patch_size)]
         target = torch.from_numpy(target).float()
 
 
@@ -136,6 +137,6 @@ class NSTK_Cast(torch.utils.data.Dataset):
             return lr_patch * 0, patch, target, torch.tensor(shift)
 
     def __len__(self):
-        return  9000 #self.length      
+        return  7000 #self.length      
     
     

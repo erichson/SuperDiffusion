@@ -137,10 +137,13 @@ class Trainer:
                 self._save_checkpoint(epoch+1)
                 self._generate_samples(epoch+1)
 
-            
             if self.gpu_id == 0 and (epoch + 1) % self.sampling_freq == 0:
                 self._save_checkpoint(epoch+1)
                 self._generate_samples(epoch+1)
+                
+            if self.gpu_id == 0 and (epoch + 1) == max_epochs:
+                self._save_checkpoint(epoch+1)
+                self._generate_samples(epoch+1)                
 
 
 def load_train_objs(superres, args):
