@@ -34,7 +34,7 @@ def ddp_setup(rank, world_size):
         world_size: Total number of processes
     """
     os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "3522"
+    os.environ["MASTER_PORT"] = "4531"
     init_process_group(backend="nccl", rank=rank, world_size=world_size) #gloo or nccl
     torch.cuda.set_device(rank)
 
@@ -58,9 +58,9 @@ class Trainer:
         self.run = run
         self.run_name = run_name
 
-    def _run_batch(self, targets, conditioning_lr_snapshots, past_snapshots, s):
+    def _run_batch(self, targets, conditioning_lr_snapshots, past_snapshots, s, dat_class):
         self.optimizer.zero_grad()
-        loss = self.model(targets, conditioning_lr_snapshots, past_snapshots, s)
+        loss = self.model(targets, conditioning_lr_snapshots, past_snapshots, s, dat_class)
         loss.backward()
         self.optimizer.step()
         self.lr_scheduler.step()
@@ -72,13 +72,14 @@ class Trainer:
     def _run_epoch(self, epoch):
         self.train_data.sampler.set_epoch(epoch)
         loss_values = []
-        for conditioning_lr_snapshots, past_snapshots, targets, s in self.train_data:
+        for conditioning_lr_snapshots, past_snapshots, targets, s, dat_class in self.train_data:
             conditioning_lr_snapshots = conditioning_lr_snapshots.to(self.gpu_id)
             past_snapshots = past_snapshots.to(self.gpu_id)
             s = s.to(self.gpu_id)
+            dat_class = dat_class.to(self.gpu_id)
 
             targets = targets.to(self.gpu_id)            
-            loss_values.append(self._run_batch(targets, conditioning_lr_snapshots, past_snapshots, s))
+            loss_values.append(self._run_batch(targets, conditioning_lr_snapshots, past_snapshots, s, dat_class))
         return loss_values
 
     def _save_checkpoint(self, epoch):
@@ -103,14 +104,15 @@ class Trainer:
                     
             
                 self.train_data.sampler.set_epoch(1)
-                conditioning_lr_snapshots, past_snapshots, targets, s = next(iter(self.train_data))
+                conditioning_lr_snapshots, past_snapshots, targets, s, dat_class = next(iter(self.train_data))
                 conditioning_lr_snapshots = conditioning_lr_snapshots.to('cuda')
                 past_snapshots = past_snapshots.to('cuda')
                 s = s.to('cuda')
+                dat_class = dat_class.to('cuda')
 
             
                 samples = self.model.module.sample(targets.shape[0], (1, targets.shape[2], targets.shape[3]), 
-                                               conditioning_lr_snapshots, past_snapshots, s,'cuda')
+                                               conditioning_lr_snapshots, past_snapshots, s, dat_class,'cuda')
                      
             
         plot_samples(samples, conditioning_lr_snapshots, targets, PATH, epoch)
@@ -152,14 +154,14 @@ class Trainer:
 
 
 def load_train_objs(superres, args):
-    train_set = NSTK(path='data/16000_2048_2048_seed_3407_w.h5', 
-                     factor=args.factor, 
-                     num_pred_steps=args.num_pred_steps)
+    train_set = NSTK(factor=args.factor, num_pred_steps=args.num_pred_steps)
     
     unet_model = UNet(image_size=256, in_channels=1, out_channels=1, 
+                      base_width=args.base_width,
                       superres=args.superres, 
                       forecast=args.forecast,
-                      num_pred_steps=args.num_pred_steps)
+                      num_pred_steps=args.num_pred_steps,
+                      num_classes=3)
     
     model = GaussianDiffusionModelCast(eps_model=unet_model.cuda(), betas=(1e-4, 0.02),
                                    n_T=args.time_steps, 
@@ -177,7 +179,7 @@ def prepare_dataloader(dataset: Dataset, batch_size: int):
         pin_memory=True,
         shuffle=False,
         sampler=DistributedSampler(dataset),
-        #num_workers=4
+        num_workers=8
     )
 
 
@@ -225,6 +227,10 @@ if __name__ == "__main__":
     parser.add_argument("--prediction-type", type=str, default='v', help="Quantity to predict during training.")
     parser.add_argument("--sampler", type=str, default='ddim', help="Sampler to use to generate images")    
     parser.add_argument("--time-steps", type=int, default=100, help="Time steps for sampling")    
+
+
+    parser.add_argument("--base-width", type=int, default=128, help="Basewidth of U-Net")    
+
 
     args = parser.parse_args()
 

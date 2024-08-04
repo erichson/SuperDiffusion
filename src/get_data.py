@@ -33,7 +33,7 @@ class NSTK(torch.utils.data.Dataset):
     
     
 class NSTK_SR(torch.utils.data.Dataset):
-    def __init__(self, path, factor, train=True,patch_size = 256,stride = 1):
+    def __init__(self, path, factor, train=True, patch_size = 256, stride = 256):
         super(NSTK_SR, self).__init__()
         self.path = path
         self.factor = factor
@@ -44,8 +44,8 @@ class NSTK_SR(torch.utils.data.Dataset):
             self.data_shape = f['w'].shape
 
             
-        self.num_patches_per_image = ((self.data_shape[2] - self.patch_size) // self.stride + 1) * \
-                                     ((self.data_shape[3] - self.patch_size) // self.stride + 1)
+        self.num_patches_per_image = ((self.data_shape[1] - self.patch_size) // self.stride + 1) * \
+                                     ((self.data_shape[2] - self.patch_size) // self.stride + 1)
 
         
     def open_hdf5(self):
@@ -62,7 +62,7 @@ class NSTK_SR(torch.utils.data.Dataset):
             index = index * 2 + 1
 
 
-        num_patches_per_row = (self.data_shape[3] - self.patch_size) // self.stride + 1
+        num_patches_per_row = (self.data_shape[2] - self.patch_size) // self.stride + 1
         image_idx = index // self.num_patches_per_image
         patch_idx = index % self.num_patches_per_image
         
@@ -81,62 +81,120 @@ class NSTK_SR(torch.utils.data.Dataset):
     
     
 class NSTK_Cast(torch.utils.data.Dataset):
-    def __init__(self, path, factor, num_pred_steps=1, patch_size=256, train=True):
+    def __init__(self, factor, num_pred_steps=1, patch_size=256, stride = 128, train=True):
         super(NSTK_Cast, self).__init__()
-        self.path = path
+        self.path1 = '/data/rdl/NSTK/1000_2048_2048_seed_3407.h5'
+        self.path2 = '/data/rdl/NSTK/8000_2048_2048_seed_3407.h5'
+        self.path3 = '/data/rdl/NSTK/16000_2048_2048_seed_3407.h5'
+        
+        
         self.factor = factor
         self.num_pred_steps = num_pred_steps
         self.train = train
         self.patch_size = patch_size
-        with h5py.File(self.path, 'r') as f:
-            self.length = len(f['w'])        
+        self.stride = stride
         
+        with h5py.File(self.path1, 'r') as f:
+            self.data_shape = f['w'].shape
+            print(self.data_shape)
+    
+        with h5py.File(self.path2, 'r') as f:
+            self.data_shape = f['w'].shape
+            print(self.data_shape)
+
+        with h5py.File(self.path3, 'r') as f:
+            self.data_shape = f['w'].shape
+            print(self.data_shape)
+
+
+        self.max_row = (self.data_shape[1] - self.patch_size) // self.stride + 1
+        self.max_col = (self.data_shape[2] - self.patch_size) // self.stride + 1    
+
+    
     def open_hdf5(self):
-        h5_file = h5py.File(self.path, 'r')
-        self.dataset = h5_file['w']
+        h5_file1 = h5py.File(self.path1, 'r')
+        self.dataset1 = h5_file1['w']
+
+        h5_file2 = h5py.File(self.path2, 'r')
+        self.dataset2 = h5_file2['w']        
+
+        h5_file3 = h5py.File(self.path3, 'r')
+        self.dataset3 = h5_file3['w']         
+
+    def __del__(self):
+        # Ensure the file is closed when the dataset object is deleted
+        if self.dataset1:
+            try:
+                self.dataset1.close()
+            except Exception as e:
+                print(f"Failed to close HDF5 file 1: {e}")
+
+        if self.dataset2:
+            try:
+                self.dataset2.close()
+            except Exception as e:
+                print(f"Failed to close HDF5 file 2: {e}")
+
+        if self.dataset3:
+            try:
+                self.dataset3.close()
+            except Exception as e:
+                print(f"Failed to close HDF5 file 3: {e}")                
+                
 
     def __getitem__(self, index):
         if not hasattr(self, 'dataset'):
             self.open_hdf5()
+ 
+             
             
-        index = index // 15            
-            
-        if self.train:    
-            index = index * 2
-        else:
-            index = index * 2 + 1
-    
-    
+        # Randomly select to super-resolve or forecast
         superres = np.random.choice([True, False], size=1)[0]
         
         if superres:
-            shift = np.random.randint(0, self.num_pred_steps, 1)[0]
+            shift = 0 #np.random.randint(0, self.num_pred_steps, 1)[0]
         else:
             shift = np.random.randint(1, self.num_pred_steps, 1)[0]
             
-    
-        # Randomly select a patch from the image
-        stride = 128 # set to 64, 32 or 16 for more variation
-        max_row = (2048 - self.patch_size) // stride
-        max_col = (2048 - self.patch_size) // stride
-        patch_row = np.random.randint(0, max_row) * stride
-        patch_col = np.random.randint(0, max_col) * stride
         
-        patch = self.dataset[index, :, patch_row:(patch_row + self.patch_size), patch_col:(patch_col + self.patch_size)]
-        patch = torch.from_numpy(patch).float()
+        # Select a time index 
+        index = index // 100  
+        
+        if self.train:    
+            index = index * 4
+        else:
+            index = index * 2 + 1            
+            
+            
+        # Randomly select a patch from the image
 
-        target = self.dataset[index + shift, :, patch_row:(patch_row + self.patch_size), patch_col:(patch_col + self.patch_size)]
-        target = torch.from_numpy(target).float()
-
+        patch_row = np.random.randint(0, self.max_row) * self.stride
+        patch_col = np.random.randint(0, self.max_col) * self.stride
+        
+        
+        # Randomly select a dataset (Re=1000 or Re=16000)
+        dataset_choice = np.random.choice([0, 1, 2], size=1)[0]
+        
+        if dataset_choice == 0:
+            dataset = self.dataset1
+        elif dataset_choice == 1:
+            dataset = self.dataset2
+        else:
+            dataset = self.dataset3
+            
+            
+        patch = torch.from_numpy(dataset[index, patch_row:(patch_row + self.patch_size), patch_col:(patch_col + self.patch_size)]).float().unsqueeze(0)
+        target = torch.from_numpy(dataset[index + shift, patch_row:(patch_row + self.patch_size), patch_col:(patch_col + self.patch_size)]).float().unsqueeze(0)
+            
 
         if superres:
             lr_patch = patch[:, ::self.factor, ::self.factor]
-            return lr_patch, patch * 0, target, torch.tensor(shift)
+            return lr_patch, patch * 0, target, torch.tensor(shift), torch.tensor(dataset_choice)
         else:
             lr_patch = patch[:, ::self.factor, ::self.factor]
-            return lr_patch * 0, patch, target, torch.tensor(shift)
+            return lr_patch * 0, patch, target, torch.tensor(shift), torch.tensor(dataset_choice)
 
     def __len__(self):
-        return  7000 #self.length      
+        return  30000 #30000 #self.length      
     
     

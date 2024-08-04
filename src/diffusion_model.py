@@ -166,14 +166,17 @@ class GaussianDiffusionModelCast(nn.Module):
         
         self.eps_model = eps_model
         self.ema = ExponentialMovingAverage(self.eps_model.parameters(), decay=ema_val)
+        
+        if self.sampler == 'ddpm':
         # register_buffer allows us to freely access these tensors by name. It helps device placement.
-        for k, v in ddpm_schedules(betas[0], betas[1], n_T).items():
-            self.register_buffer(k, v)
+            for k, v in ddpm_schedules(betas[0], betas[1], n_T).items():
+                self.register_buffer(k, v)
 
         self.n_T = n_T
         self.criterion = criterion
 
-    def forward(self,  snapshots: torch.Tensor, conditioning_snapshots: torch.Tensor, past_snapshots: torch.Tensor, s: torch.Tensor) -> torch.Tensor:
+    def forward(self,  snapshots: torch.Tensor, conditioning_snapshots: torch.Tensor, 
+                past_snapshots: torch.Tensor, s: torch.Tensor, dat_class:torch.Tensor) -> torch.Tensor:
 
 
         conditioning_snapshots_interpolated = nn.functional.interpolate(conditioning_snapshots, 
@@ -205,7 +208,7 @@ class GaussianDiffusionModelCast(nn.Module):
         # We should predict the "error term" from this snapshots_t. Loss is what we return.
         eps_predicted = self.eps_model(residual_snapshots_t, _ts, 
                                        lowres_snapshot=conditioning_snapshots_interpolated,
-                                       past_snapshot=past_snapshots, s=s)
+                                       past_snapshot=past_snapshots, s=s, y=dat_class)
         
         
         # Different predictions schemes
@@ -221,7 +224,8 @@ class GaussianDiffusionModelCast(nn.Module):
 
 
 
-    def sample(self, n_sample: int, size, conditioning_snapshots: torch.Tensor, past_snapshots: torch.Tensor, s: torch.Tensor, device='cuda') -> torch.Tensor:
+    def sample(self, n_sample: int, size, conditioning_snapshots: torch.Tensor, 
+               past_snapshots: torch.Tensor, s: torch.Tensor, dat_class: torch.Tensor, device='cuda') -> torch.Tensor:
         """
         Let's sample
         See Alg 2 in https://arxiv.org/pdf/2006.11239
@@ -244,7 +248,7 @@ class GaussianDiffusionModelCast(nn.Module):
                 
                 pred = self.eps_model(snapshots_i, torch.tensor(i / self.n_T).to(device).repeat(n_sample),
                                       lowres_snapshot=conditioning_snapshots_interpolated,
-                                      past_snapshot=past_snapshots, s=s)
+                                      past_snapshot=past_snapshots, s=s, y=dat_class)
 
                 if self.prediction_type == 'eps':
                     eps = pred
@@ -265,7 +269,7 @@ class GaussianDiffusionModelCast(nn.Module):
 
 
                 pred = self.eps_model(snapshots_i, time.to(device), lowres_snapshot=conditioning_snapshots_interpolated,
-                                      past_snapshot=past_snapshots, s=s)
+                                      past_snapshot=past_snapshots, s=s, y=dat_class)
 
                 if self.prediction_type == 'v':                    
                     mean = alpha * snapshots_i - sigma * pred

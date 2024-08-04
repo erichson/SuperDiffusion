@@ -844,7 +844,7 @@ def UNet(
     image_size,
     in_channels=1,
     out_channels=1,
-    base_width=64,
+    base_width=128,
     num_classes=None,
     superres=False,
     forecast=False,
@@ -853,10 +853,11 @@ def UNet(
 ):
 
     if image_size == 256:
-        channel_mult = (1, 2, 4, 8)
+        #channel_mult = (1, 2, 4, 8)
+        channel_mult =  (1, 1, 2, 2, 4, 4)
 
     elif image_size == 512:
-        channel_mult = (1, 2, 4, 8)
+        channel_mult = (1, 1, 2, 2, 4, 4)
 
     elif image_size == 1024:
         channel_mult = (1, 2, 4)
@@ -877,12 +878,12 @@ def UNet(
         out_channels=out_channels,
         num_res_blocks=2,
         attention_resolutions=tuple(attention_ds),
-        dropout=0.1,
+        dropout=0.0,
         channel_mult=channel_mult,
         num_classes=num_classes,
         use_checkpoint=False,
         use_fp16=False,
-        num_heads=32,
+        num_heads=4,
         num_head_channels=64,
         num_heads_upsample=-1,
         use_scale_shift_norm=True,
