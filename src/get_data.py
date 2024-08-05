@@ -39,15 +39,14 @@ class NSTK_SR(torch.utils.data.Dataset):
         self.factor = factor
         self.train = train
         self.patch_size = patch_size
-        self.stride = 1
+        self.stride = stride
         with h5py.File(self.path, 'r') as f:
             self.data_shape = f['w'].shape
 
             
-        self.num_patches_per_image = ((self.data_shape[1] - self.patch_size) // self.stride + 1) * \
-                                     ((self.data_shape[2] - self.patch_size) // self.stride + 1)
+        self.num_patches_per_image = ((self.data_shape[2] - self.patch_size) // self.stride + 1) * \
+                                     ((self.data_shape[3] - self.patch_size) // self.stride + 1)
 
-        
     def open_hdf5(self):
         h5_file = h5py.File(self.path, 'r')
         self.dataset = h5_file['w']
