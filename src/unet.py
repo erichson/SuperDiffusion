@@ -598,6 +598,7 @@ class UNetModel(nn.Module):
         use_new_attention_order=False,
         superres = False,
         forecast = False,
+        Reynolds_number = False,
         num_pred_steps = None
     ):
         super().__init__()
@@ -623,6 +624,7 @@ class UNetModel(nn.Module):
         self.channel_mult = channel_mult
         self.conv_resample = conv_resample
         self.num_classes = num_classes
+        self.Reynolds_number = Reynolds_number
         self.use_checkpoint = use_checkpoint
         self.dtype = th.float16 if use_fp16 else th.float32
         self.num_heads = num_heads
@@ -643,6 +645,13 @@ class UNetModel(nn.Module):
 
         if self.num_classes is not None:
             self.label_emb = nn.Embedding(num_classes, time_embed_dim)
+            
+        if self.Reynolds_number is not None:
+            self.Reynolds_emb = nn.Sequential(
+                linear(model_channels, time_embed_dim),
+                nn.SiLU(),
+                linear(time_embed_dim, time_embed_dim),
+            )           
             
         if self.num_pred_steps is not None:
             self.pred_steps_emb = nn.Embedding(num_pred_steps, time_embed_dim)
@@ -790,7 +799,7 @@ class UNetModel(nn.Module):
 
 
 
-    def forward(self, x, timesteps, lowres_snapshot=None, past_snapshot=None, s=None, y=None):
+    def forward(self, x, timesteps, lowres_snapshot=None, past_snapshot=None, s=None, Re=None, y=None):
         """
         Apply the model to an input batch.
 
@@ -807,6 +816,11 @@ class UNetModel(nn.Module):
             self.num_pred_steps is not None
         ), "must specify the number of different prediction steps if and only if the model is time step conditional"
 
+        assert (Re is not None) == (
+            self.Reynolds_number is not None
+        ), "must specify the Reynolds number"
+
+
 
         hs = []
         emb = self.time_embed(timestep_embedding(timesteps, self.model_channels))
@@ -820,6 +834,9 @@ class UNetModel(nn.Module):
         if self.num_classes is not None:
             assert y.shape == (x.shape[0],)
             emb = emb + self.label_emb(y)
+            
+        if self.Reynolds_number is not None:
+            emb = emb + self.Reynolds_emb(timestep_embedding(Re, self.model_channels))
             
         if self.num_pred_steps is not None:
             assert s.shape == (x.shape[0],)
@@ -848,6 +865,7 @@ def UNet(
     num_classes=None,
     superres=False,
     forecast=False,
+    Reynolds_number=False,
     num_pred_steps=None,
 
 ):
@@ -891,5 +909,6 @@ def UNet(
         use_new_attention_order=True,
         superres=superres,
         forecast=forecast,
+        Reynolds_number=Reynolds_number,
         num_pred_steps=num_pred_steps,
     )

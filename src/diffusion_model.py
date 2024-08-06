@@ -176,7 +176,7 @@ class GaussianDiffusionModelCast(nn.Module):
         self.criterion = criterion
 
     def forward(self,  snapshots: torch.Tensor, conditioning_snapshots: torch.Tensor, 
-                past_snapshots: torch.Tensor, s: torch.Tensor, dat_class:torch.Tensor) -> torch.Tensor:
+                past_snapshots: torch.Tensor, s: torch.Tensor, Reynolds_number:torch.Tensor) -> torch.Tensor:
 
 
         conditioning_snapshots_interpolated = nn.functional.interpolate(conditioning_snapshots, 
@@ -208,7 +208,7 @@ class GaussianDiffusionModelCast(nn.Module):
         # We should predict the "error term" from this snapshots_t. Loss is what we return.
         eps_predicted = self.eps_model(residual_snapshots_t, _ts, 
                                        lowres_snapshot=conditioning_snapshots_interpolated,
-                                       past_snapshot=past_snapshots, s=s, y=dat_class)
+                                       past_snapshot=past_snapshots, s=s, Re=Reynolds_number)
         
         
         # Different predictions schemes
@@ -225,7 +225,7 @@ class GaussianDiffusionModelCast(nn.Module):
 
 
     def sample(self, n_sample: int, size, conditioning_snapshots: torch.Tensor, 
-               past_snapshots: torch.Tensor, s: torch.Tensor, dat_class: torch.Tensor, device='cuda') -> torch.Tensor:
+               past_snapshots: torch.Tensor, s: torch.Tensor, Reynolds_number: torch.Tensor, device='cuda') -> torch.Tensor:
         """
         Let's sample
         See Alg 2 in https://arxiv.org/pdf/2006.11239
@@ -248,7 +248,7 @@ class GaussianDiffusionModelCast(nn.Module):
                 
                 pred = self.eps_model(snapshots_i, torch.tensor(i / self.n_T).to(device).repeat(n_sample),
                                       lowres_snapshot=conditioning_snapshots_interpolated,
-                                      past_snapshot=past_snapshots, s=s, y=dat_class)
+                                      past_snapshot=past_snapshots, s=s, Re=Reynolds_number)
 
                 if self.prediction_type == 'eps':
                     eps = pred
@@ -269,7 +269,7 @@ class GaussianDiffusionModelCast(nn.Module):
 
 
                 pred = self.eps_model(snapshots_i, time.to(device), lowres_snapshot=conditioning_snapshots_interpolated,
-                                      past_snapshot=past_snapshots, s=s, y=dat_class)
+                                      past_snapshot=past_snapshots, s=s, Re=Reynolds_number)
 
                 if self.prediction_type == 'v':                    
                     mean = alpha * snapshots_i - sigma * pred

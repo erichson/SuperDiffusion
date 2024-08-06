@@ -84,8 +84,8 @@ class NSTK_Cast(torch.utils.data.Dataset):
     def __init__(self, factor, num_pred_steps=1, patch_size=256, stride = 128, train=True):
         super(NSTK_Cast, self).__init__()
         self.path1 = '/data/rdl/NSTK/1000_2048_2048_seed_3407.h5'
-        self.path2 = '/data/rdl/NSTK/8000_2048_2048_seed_3407.h5'
-        self.path3 = '/data/rdl/NSTK/16000_2048_2048_seed_3407.h5'
+        self.path2 = '/data/rdl/NSTK/8000_2048_2048_seed_2150.h5'
+        self.path3 = '/data/rdl/NSTK/32000_2048_2048_seed_2150.h5'
         
         
         self.factor = factor
@@ -121,26 +121,7 @@ class NSTK_Cast(torch.utils.data.Dataset):
         h5_file3 = h5py.File(self.path3, 'r')
         self.dataset3 = h5_file3['w']         
 
-    def __del__(self):
-        # Ensure the file is closed when the dataset object is deleted
-        if self.dataset1:
-            try:
-                self.dataset1.close()
-            except Exception as e:
-                print(f"Failed to close HDF5 file 1: {e}")
 
-        if self.dataset2:
-            try:
-                self.dataset2.close()
-            except Exception as e:
-                print(f"Failed to close HDF5 file 2: {e}")
-
-        if self.dataset3:
-            try:
-                self.dataset3.close()
-            except Exception as e:
-                print(f"Failed to close HDF5 file 3: {e}")                
-                
 
     def __getitem__(self, index):
         if not hasattr(self, 'dataset'):
@@ -158,10 +139,10 @@ class NSTK_Cast(torch.utils.data.Dataset):
             
         
         # Select a time index 
-        index = index // 100  
+        index = index // 75  
         
         if self.train:    
-            index = index * 4
+            index = index * 2
         else:
             index = index * 2 + 1            
             
@@ -173,13 +154,13 @@ class NSTK_Cast(torch.utils.data.Dataset):
         
         
         # Randomly select a dataset (Re=1000 or Re=16000)
-        dataset_choice = np.random.choice([0, 1, 2], size=1)[0]
+        Reynolds_number = np.random.choice([1000, 8000, 32000], size=1)[0]
         
-        if dataset_choice == 0:
+        if Reynolds_number == 1000:
             dataset = self.dataset1
-        elif dataset_choice == 1:
+        elif Reynolds_number == 8000:
             dataset = self.dataset2
-        else:
+        elif Reynolds_number == 32000:
             dataset = self.dataset3
             
             
@@ -189,12 +170,12 @@ class NSTK_Cast(torch.utils.data.Dataset):
 
         if superres:
             lr_patch = patch[:, ::self.factor, ::self.factor]
-            return lr_patch, patch * 0, target, torch.tensor(shift), torch.tensor(dataset_choice)
+            return lr_patch, patch * 0, target, torch.tensor(shift), torch.tensor(Reynolds_number)
         else:
             lr_patch = patch[:, ::self.factor, ::self.factor]
-            return lr_patch * 0, patch, target, torch.tensor(shift), torch.tensor(dataset_choice)
+            return lr_patch * 0, patch, target, torch.tensor(shift), torch.tensor(Reynolds_number)
 
     def __len__(self):
-        return  30000 #30000 #self.length      
+        return  45000 #30000 #self.length      
     
     

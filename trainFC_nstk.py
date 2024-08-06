@@ -34,7 +34,7 @@ def ddp_setup(rank, world_size):
         world_size: Total number of processes
     """
     os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "4531"
+    os.environ["MASTER_PORT"] = "4231"
     init_process_group(backend="nccl", rank=rank, world_size=world_size) #gloo or nccl
     torch.cuda.set_device(rank)
 
@@ -58,9 +58,9 @@ class Trainer:
         self.run = run
         self.run_name = run_name
 
-    def _run_batch(self, targets, conditioning_lr_snapshots, past_snapshots, s, dat_class):
+    def _run_batch(self, targets, conditioning_lr_snapshots, past_snapshots, s, Reynolds_number):
         self.optimizer.zero_grad()
-        loss = self.model(targets, conditioning_lr_snapshots, past_snapshots, s, dat_class)
+        loss = self.model(targets, conditioning_lr_snapshots, past_snapshots, s, Reynolds_number)
         loss.backward()
         self.optimizer.step()
         self.lr_scheduler.step()
@@ -72,14 +72,14 @@ class Trainer:
     def _run_epoch(self, epoch):
         self.train_data.sampler.set_epoch(epoch)
         loss_values = []
-        for conditioning_lr_snapshots, past_snapshots, targets, s, dat_class in self.train_data:
+        for conditioning_lr_snapshots, past_snapshots, targets, s, Reynolds_number in self.train_data:
             conditioning_lr_snapshots = conditioning_lr_snapshots.to(self.gpu_id)
             past_snapshots = past_snapshots.to(self.gpu_id)
             s = s.to(self.gpu_id)
-            dat_class = dat_class.to(self.gpu_id)
+            Reynolds_number = Reynolds_number.to(self.gpu_id)
 
             targets = targets.to(self.gpu_id)            
-            loss_values.append(self._run_batch(targets, conditioning_lr_snapshots, past_snapshots, s, dat_class))
+            loss_values.append(self._run_batch(targets, conditioning_lr_snapshots, past_snapshots, s, Reynolds_number))
         return loss_values
 
     def _save_checkpoint(self, epoch):
@@ -104,15 +104,15 @@ class Trainer:
                     
             
                 self.train_data.sampler.set_epoch(1)
-                conditioning_lr_snapshots, past_snapshots, targets, s, dat_class = next(iter(self.train_data))
+                conditioning_lr_snapshots, past_snapshots, targets, s, Reynolds_number = next(iter(self.train_data))
                 conditioning_lr_snapshots = conditioning_lr_snapshots.to('cuda')
                 past_snapshots = past_snapshots.to('cuda')
                 s = s.to('cuda')
-                dat_class = dat_class.to('cuda')
+                Reynolds_number = Reynolds_number.to('cuda')
 
             
                 samples = self.model.module.sample(targets.shape[0], (1, targets.shape[2], targets.shape[3]), 
-                                               conditioning_lr_snapshots, past_snapshots, s, dat_class,'cuda')
+                                               conditioning_lr_snapshots, past_snapshots, s, Reynolds_number,'cuda')
                      
             
         plot_samples(samples, conditioning_lr_snapshots, targets, PATH, epoch)
@@ -161,7 +161,7 @@ def load_train_objs(superres, args):
                       superres=args.superres, 
                       forecast=args.forecast,
                       num_pred_steps=args.num_pred_steps,
-                      num_classes=3)
+                      Reynolds_number=True)
     
     model = GaussianDiffusionModelCast(eps_model=unet_model.cuda(), betas=(1e-4, 0.02),
                                    n_T=args.time_steps, 
