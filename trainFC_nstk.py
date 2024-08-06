@@ -83,14 +83,15 @@ class Trainer:
         return loss_values
 
     def _save_checkpoint(self, epoch):
-        ckp = self.model.module.state_dict()
-        if 'ema' not in ckp:
-            ckp['ema'] = self.model.module.ema.state_dict(),
-
+        save_dict = {
+            'model': self.model.module.eps_model.state_dict(),
+            'ema': self.model.module.ema.state_dict(),
+            'optimizer': self.optimizer.state_dict()
+        }
         if not os.path.exists("./checkpoints"):
                 os.makedirs("./checkpoints")
         PATH = "./checkpoints/" + "checkpoint_" + self.run_name + ".pt"
-        torch.save(ckp, PATH)
+        torch.save(save_dict, PATH)
         print(f"Epoch {epoch} | Training checkpoint saved at {PATH}")
 
     
