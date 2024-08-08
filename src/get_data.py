@@ -82,9 +82,9 @@ class NSTK_SR(torch.utils.data.Dataset):
 class NSTK_Cast(torch.utils.data.Dataset):
     def __init__(self, factor, num_pred_steps=1, patch_size=256, stride = 128, train=True):
         super(NSTK_Cast, self).__init__()
-        self.path1 = '/data/rdl/NSTK/1000_2048_2048_seed_3407.h5'
+        self.path1 = '/data/rdl/NSTK/1000_2048_2048_seed_2150.h5'
         self.path2 = '/data/rdl/NSTK/8000_2048_2048_seed_2150.h5'
-        self.path3 = '/data/rdl/NSTK/32000_2048_2048_seed_2150.h5'
+        self.path3 = '/data/rdl/NSTK/16000_2048_2048_seed_2150.h5'
         
         
         self.factor = factor
@@ -138,10 +138,10 @@ class NSTK_Cast(torch.utils.data.Dataset):
             
         
         # Select a time index 
-        index = index // 75  
+        index = index // 110  
         
         if self.train:    
-            index = index * 2
+            index = index * 4
         else:
             index = index * 2 + 1            
             
@@ -153,13 +153,13 @@ class NSTK_Cast(torch.utils.data.Dataset):
         
         
         # Randomly select a dataset (Re=1000 or Re=16000)
-        Reynolds_number = np.random.choice([1000, 8000, 32000], size=1)[0]
+        Reynolds_number = np.random.choice([1000, 8000, 16000], size=1)[0]
         
         if Reynolds_number == 1000:
             dataset = self.dataset1
         elif Reynolds_number == 8000:
             dataset = self.dataset2
-        elif Reynolds_number == 32000:
+        elif Reynolds_number == 16000:
             dataset = self.dataset3
             
             
