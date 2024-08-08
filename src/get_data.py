@@ -82,9 +82,15 @@ class NSTK_SR(torch.utils.data.Dataset):
 class NSTK_Cast(torch.utils.data.Dataset):
     def __init__(self, factor, num_pred_steps=1, patch_size=256, stride = 128, train=True):
         super(NSTK_Cast, self).__init__()
-        self.path1 = '/data/rdl/NSTK/1000_2048_2048_seed_3407.h5'
-        self.path2 = '/data/rdl/NSTK/8000_2048_2048_seed_2150.h5'
-        self.path3 = '/data/rdl/NSTK/32000_2048_2048_seed_2150.h5'
+        # self.path1 = '/data/rdl/NSTK/1000_2048_2048_seed_3407.h5'
+        # self.path2 = '/data/rdl/NSTK/8000_2048_2048_seed_2150.h5'
+        # self.path3 = '/data/rdl/NSTK/32000_2048_2048_seed_2150.h5'
+
+
+        self.path1 = '/pscratch/sd/v/vmikuni/FM/nskt_tensor/1000_2048_2048_seed_3407.h5'
+        self.path2 = '/pscratch/sd/v/vmikuni/FM/nskt_tensor/8000_2048_2048_seed_2150.h5'
+        self.path3 = '/pscratch/sd/v/vmikuni/FM/nskt_tensor/32000_2048_2048_seed_2150.h5'
+
         
         
         self.factor = factor
@@ -95,15 +101,15 @@ class NSTK_Cast(torch.utils.data.Dataset):
         
         with h5py.File(self.path1, 'r') as f:
             self.data_shape = f['w'].shape
-            print(self.data_shape)
+            #print(self.data_shape)
     
         with h5py.File(self.path2, 'r') as f:
             self.data_shape = f['w'].shape
-            print(self.data_shape)
+            #print(self.data_shape)
 
         with h5py.File(self.path3, 'r') as f:
             self.data_shape = f['w'].shape
-            print(self.data_shape)
+            #print(self.data_shape)
 
 
         self.max_row = (self.data_shape[1] - self.patch_size) // self.stride + 1
@@ -126,17 +132,8 @@ class NSTK_Cast(torch.utils.data.Dataset):
         if not hasattr(self, 'dataset'):
             self.open_hdf5()
  
-             
-            
-        # Randomly select to super-resolve or forecast
-        superres = np.random.choice([True, False], size=1)[0]
-        
-        if superres:
-            shift = 0 #np.random.randint(0, self.num_pred_steps, 1)[0]
-        else:
-            shift = np.random.randint(1, self.num_pred_steps, 1)[0]
-            
-        
+        shift = np.random.randint(1, self.num_pred_steps, 1)[0]
+                        
         # Select a time index 
         index = index // 75  
         
@@ -164,15 +161,11 @@ class NSTK_Cast(torch.utils.data.Dataset):
             
             
         patch = torch.from_numpy(dataset[index, patch_row:(patch_row + self.patch_size), patch_col:(patch_col + self.patch_size)]).float().unsqueeze(0)
-        target = torch.from_numpy(dataset[index + shift, patch_row:(patch_row + self.patch_size), patch_col:(patch_col + self.patch_size)]).float().unsqueeze(0)
+        target_SR = torch.from_numpy(dataset[index, patch_row:(patch_row + self.patch_size), patch_col:(patch_col + self.patch_size)]).float().unsqueeze(0)
+        target_FC = torch.from_numpy(dataset[index + shift, patch_row:(patch_row + self.patch_size), patch_col:(patch_col + self.patch_size)]).float().unsqueeze(0)
             
-
-        if superres:
-            lr_patch = patch[:, ::self.factor, ::self.factor]
-            return lr_patch, patch * 0, target, torch.tensor(shift), torch.tensor(Reynolds_number)
-        else:
-            lr_patch = patch[:, ::self.factor, ::self.factor]
-            return lr_patch * 0, patch, target, torch.tensor(shift), torch.tensor(Reynolds_number)
+        lr_patch = patch[:, ::self.factor, ::self.factor]
+        return lr_patch, patch, target_SR,target_FC, torch.tensor(shift), torch.tensor(Reynolds_number/1000.)
 
     def __len__(self):
         return  45000 #30000 #self.length      

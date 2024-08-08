@@ -149,11 +149,12 @@ class GaussianDiffusionModelCast(nn.Module):
     def __init__(
         self,
         eps_model: nn.Module,
+        lowres_model: nn.Module,
+        past_model: nn.Module,
         betas: Tuple[float, float],
         n_T: int,
         prediction_type: str,
         sampler:str,
-        ema_val = 0.999,
         criterion: nn.Module = nn.MSELoss(),
     ) -> None:
         super(GaussianDiffusionModelCast, self).__init__()
@@ -165,8 +166,9 @@ class GaussianDiffusionModelCast(nn.Module):
 
         
         self.eps_model = eps_model
-        self.ema = ExponentialMovingAverage(self.eps_model.parameters(), decay=ema_val)
-        
+        self.lowres_model = lowres_model
+        self.past_model = past_model
+                
         if self.sampler == 'ddpm':
         # register_buffer allows us to freely access these tensors by name. It helps device placement.
             for k, v in ddpm_schedules(betas[0], betas[1], n_T).items():
@@ -175,69 +177,85 @@ class GaussianDiffusionModelCast(nn.Module):
         self.n_T = n_T
         self.criterion = criterion
 
-    def forward(self,  snapshots: torch.Tensor, conditioning_snapshots: torch.Tensor, 
+    def forward(self,  snapshots_SR: torch.Tensor,snapshots_FC: torch.Tensor,
+                conditioning_snapshots: torch.Tensor, 
                 past_snapshots: torch.Tensor, s: torch.Tensor, Reynolds_number:torch.Tensor) -> torch.Tensor:
 
 
         conditioning_snapshots_interpolated = nn.functional.interpolate(conditioning_snapshots, 
-                                                                        size=[snapshots.shape[2], snapshots.shape[3]], 
+                                                                        size=[snapshots_SR.shape[2], snapshots_SR.shape[3]], 
                                                                         mode='bilinear')
 
-        residual_snapshots = snapshots - conditioning_snapshots_interpolated - past_snapshots
-
+        
+        residual_snapshots_SR = snapshots_SR - conditioning_snapshots_interpolated
+        residual_snapshots_FC = snapshots_FC - past_snapshots
+ 
 
         if self.sampler == 'ddpm':
             """
             Forward diffusion: tries to guess the epsilon value from snapshot_t using the eps_model.
             See Alg 1 in https://arxiv.org/pdf/2006.11239
             """
-            _ts = torch.randint(1, self.n_T + 1, (residual_snapshots.shape[0],)).to(residual_snapshots.device) # t ~ Uniform(0, n_T)
-            eps = torch.randn_like(residual_snapshots)  # eps ~ N(0, 1)
+            _ts = torch.randint(1, self.n_T + 1, (residual_snapshots_SR.shape[0],)).to(residual_snapshots_SR.device) # t ~ Uniform(0, n_T)
+            eps = torch.randn_like(residual_snapshots_SR)  # eps ~ N(0, 1)
             alpha = self.sqrtab[_ts, None, None, None]
             sigma = self.sqrtmab[_ts, None, None, None]
             _ts = _ts/self.n_T
             
             
         elif self.sampler == 'ddim':        
-            _ts = torch.rand(size=(residual_snapshots.shape[0],)).to(residual_snapshots.device)
-            eps = torch.randn_like(residual_snapshots)  # eps ~ N(0, 1)
+            _ts = torch.rand(size=(residual_snapshots_SR.shape[0],)).to(residual_snapshots_SR.device)
+            eps = torch.randn_like(residual_snapshots_SR)  # eps ~ N(0, 1)
             _, alpha, sigma = get_logsnr_alpha_sigma(_ts)
+
             
-        residual_snapshots_t = alpha * residual_snapshots + eps * sigma
+        residual_snapshots_t_SR = alpha * residual_snapshots_SR + eps * sigma
+        residual_snapshots_t_FC = alpha * residual_snapshots_FC + eps * sigma
 
         # We should predict the "error term" from this snapshots_t. Loss is what we return.
-        eps_predicted = self.eps_model(residual_snapshots_t, _ts, 
-                                       lowres_snapshot=conditioning_snapshots_interpolated,
-                                       past_snapshot=past_snapshots, s=s, Re=Reynolds_number)
+        eps_predicted_SR = self.eps_model(residual_snapshots_t_SR, _ts, s=s, Re=Reynolds_number)
+        eps_predicted_SR = torch.cat([eps_predicted_SR, conditioning_snapshots_interpolated], dim=1)
+        eps_predicted_SR = self.lowres_model(eps_predicted_SR, _ts)
+
+        
+        eps_predicted_FC = self.eps_model(residual_snapshots_t_FC, _ts, s=s, Re=Reynolds_number)
+        eps_predicted_FC = torch.cat([eps_predicted_FC, past_snapshots], dim=1)
+        eps_predicted_FC = self.past_model(eps_predicted_FC, _ts)
         
         
         # Different predictions schemes
         if self.prediction_type == 'x':
-            target = residual_snapshots
+            target_SR = residual_snapshots_SR
+            target_FC = residual_snapshots_FC
         elif self.prediction_type == 'eps':
-            target = eps
+            target_SR = eps
+            target_FC = eps
         elif self.prediction_type == 'v':
-            target = alpha * eps - sigma * residual_snapshots
+            target_SR = alpha * eps - sigma * residual_snapshots_SR
+            target_FC = alpha * eps - sigma * residual_snapshots_FC
         
-        return self.criterion(eps_predicted, target)
+        return self.criterion(eps_predicted_SR, target_SR) + self.criterion(eps_predicted_FC, target_FC)
 
 
 
 
-    def sample(self, n_sample: int, size, conditioning_snapshots: torch.Tensor, 
-               past_snapshots: torch.Tensor, s: torch.Tensor, Reynolds_number: torch.Tensor, device='cuda') -> torch.Tensor:
+    def sample(self, n_sample: int, size,
+               conditioning_snapshots: torch.Tensor, s: torch.Tensor,
+               Reynolds_number: torch.Tensor, device='cuda',superres = True,) -> torch.Tensor:
         """
         Let's sample
         See Alg 2 in https://arxiv.org/pdf/2006.11239
         """
         snapshots_i = torch.randn(n_sample, *size).to(device)  # x_T ~ N(0, 1)
         
-        
-
-        conditioning_snapshots_interpolated = nn.functional.interpolate(conditioning_snapshots[0:snapshots_i.shape[0]], 
-                                                                       size=[snapshots_i.shape[2], snapshots_i.shape[3]], 
-                                                                       mode='bilinear')
-
+        if superres:
+            conditional = nn.functional.interpolate(conditioning_snapshots[0:snapshots_i.shape[0]], 
+                                                    size=[snapshots_i.shape[2], snapshots_i.shape[3]], 
+                                                    mode='bilinear')
+            model_head = self.lowres_model
+        else:
+            conditional = conditioning_snapshots
+            model_head = self.past_model
 
         if self.sampler == 'ddpm':  
             for i in range(self.n_T, 0, -1):
@@ -245,10 +263,14 @@ class GaussianDiffusionModelCast(nn.Module):
                 
                 alpha = self.sqrtab[i]
                 sigma = self.sqrtmab[i]
+
                 
-                pred = self.eps_model(snapshots_i, torch.tensor(i / self.n_T).to(device).repeat(n_sample),
-                                      lowres_snapshot=conditioning_snapshots_interpolated,
-                                      past_snapshot=past_snapshots, s=s, Re=Reynolds_number)
+                pred = self.eps_model(snapshots_i,
+                                      torch.tensor(i / self.n_T).to(device).repeat(n_sample),
+                                      s=s, Re=Reynolds_number)
+                pred = torch.cat([pred, conditional], dim=1)
+                pred = model_head(pred,torch.tensor(i / self.n_T).to(device).repeat(n_sample))
+
 
                 if self.prediction_type == 'eps':
                     eps = pred
@@ -268,8 +290,11 @@ class GaussianDiffusionModelCast(nn.Module):
                 logsnr_, alpha_, sigma_ = get_logsnr_alpha_sigma(torch.ones(n_sample,).to(device) * (time_step - 1) / self.n_T)
 
 
-                pred = self.eps_model(snapshots_i, time.to(device), lowres_snapshot=conditioning_snapshots_interpolated,
-                                      past_snapshot=past_snapshots, s=s, Re=Reynolds_number)
+                pred = self.eps_model(snapshots_i,
+                                      time.to(device),
+                                      s=s, Re=Reynolds_number)
+                pred = torch.cat([pred, conditional], dim=1)
+                pred = model_head(pred, time.to(device),)
 
                 if self.prediction_type == 'v':                    
                     mean = alpha * snapshots_i - sigma * pred
@@ -288,7 +313,7 @@ class GaussianDiffusionModelCast(nn.Module):
 
 
 
-        return snapshots_i + conditioning_snapshots_interpolated + past_snapshots
+        return snapshots_i + conditional
 
     
     
