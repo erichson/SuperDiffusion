@@ -119,6 +119,21 @@ def timestep_embedding(timesteps, dim, max_period=10000):
     return embedding
 
 
+class MPFourier(nn.Module):
+    def __init__(self, num_channels, bandwidth=1):
+        super().__init__()
+        self.register_buffer('freqs', 2 * np.pi * th.randn(num_channels) * bandwidth)
+        self.register_buffer('phases', 2 * np.pi * th.rand(num_channels))
+
+    def forward(self, x):
+        y = x.to(th.float32)
+        y = y.ger(self.freqs.to(th.float32))
+        y = y + self.phases.to(th.float32)
+        y = y.cos() * np.sqrt(2)
+        return y.to(x.dtype)
+
+
+
 def checkpoint(func, inputs, params, flag):
     """
     Evaluate a function without caching intermediate activations, allowing for
@@ -636,13 +651,13 @@ class UNetModel(nn.Module):
 
         time_embed_dim = model_channels * 4 * mult
         
-                
+        self.emb = MPFourier(self.model_channels)
         self.time_embed = nn.Sequential(
             linear(model_channels, time_embed_dim),
             nn.SiLU(),
             linear(time_embed_dim, time_embed_dim),
         )
-
+        
         if self.num_classes is not None:
             self.label_emb = nn.Embedding(num_classes, time_embed_dim)
             
@@ -823,7 +838,7 @@ class UNetModel(nn.Module):
 
 
         hs = []
-        emb = self.time_embed(timestep_embedding(timesteps, self.model_channels))
+        emb = self.time_embed(self.emb(timesteps, self.model_channels))
 
         if lowres_snapshot is not None:
             x = th.cat([x, lowres_snapshot], dim=1)
