@@ -83,9 +83,9 @@ class NSTK_Cast(torch.utils.data.Dataset):
     def __init__(self, factor, num_pred_steps=1, patch_size=256, stride = 128, train=True):
         super(NSTK_Cast, self).__init__()
 
-        self.paths = ['/data/rdl/NSTK/1000_2048_2048_seed_2150.h5', 
-                      '/data/rdl/NSTK/8000_2048_2048_seed_2150.h5', 
-                      '/data/rdl/NSTK/16000_2048_2048_seed_2150.h5',
+        self.paths = ['/pscratch/sd/v/vmikuni/FM/nskt_tensor/1000_2048_2048_seed_2150.h5', 
+                      '/pscratch/sd/v/vmikuni/FM/nskt_tensor/8000_2048_2048_seed_2150.h5', 
+                      '/pscratch/sd/v/vmikuni/FM/nskt_tensor/16000_2048_2048_seed_2150.h5',
                       ]
 
         self.RN = [1000,8000,32000]
@@ -149,15 +149,14 @@ class NSTK_Cast(torch.utils.data.Dataset):
         patch = torch.from_numpy(dataset[index, patch_row:(patch_row + self.patch_size), patch_col:(patch_col + self.patch_size)]).float().unsqueeze(0)
         target = torch.from_numpy(dataset[index + shift, patch_row:(patch_row + self.patch_size), patch_col:(patch_col + self.patch_size)]).float().unsqueeze(0)
             
-
         if superres:
             lr_patch = patch[:, ::self.factor, ::self.factor]
-            return lr_patch, patch * 0, target, torch.tensor(shift), torch.tensor(Reynolds_number)
+            return lr_patch, patch * 0, target, torch.tensor(shift), torch.tensor(Reynolds_number/40_000.)
         else:
             lr_patch = patch[:, ::self.factor, ::self.factor]
-            return lr_patch * 0, patch, target, torch.tensor(shift), torch.tensor(Reynolds_number)
+            return lr_patch * 0, patch, target, torch.tensor(shift), torch.tensor(Reynolds_number/40_000.)
 
     def __len__(self):
-        return  45000 #30000 #self.length      
+        return  40000 #30000 #self.length      
     
     

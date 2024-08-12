@@ -838,7 +838,7 @@ class UNetModel(nn.Module):
 
 
         hs = []
-        emb = self.time_embed(self.emb(timesteps, self.model_channels))
+        emb = self.time_embed(self.emb(timesteps))
 
         if lowres_snapshot is not None:
             x = th.cat([x, lowres_snapshot], dim=1)
