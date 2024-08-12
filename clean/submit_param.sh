@@ -1,0 +1,1 @@
+sbatch submit.sh "$@"
