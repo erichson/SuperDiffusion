@@ -129,7 +129,7 @@ class Trainer:
         )
         #print(len(self.train_data))
 
-        
+        best_mse = np.inf
         self.model.train()
         for epoch in range(max_epochs):
             loss_values = []
@@ -140,19 +140,20 @@ class Trainer:
                 print(f"Epoch {epoch} | loss {avg_loss} | learning rate {self.lr_scheduler.get_last_lr()}")
                 self.run.log({"loss": avg_loss})
 
+                if best_mse > avg_loss:
+                     self._save_checkpoint(epoch+1)
+                     best_mse = avg_loss
             
             if self.gpu_id == 0 and epoch == 0:
-                self._save_checkpoint(epoch+1)
                 self._generate_samples(epoch+1)
 
             if self.gpu_id == 0 and (epoch + 1) % self.sampling_freq == 0:
-                self._save_checkpoint(epoch+1)
                 self._generate_samples(epoch+1)
                 
             if self.gpu_id == 0 and (epoch + 1) == max_epochs:
-                self._save_checkpoint(epoch+1)
                 self._generate_samples(epoch+1)                
 
+           
 
 def load_train_objs(superres, args):
     train_set = NSTK(factor=args.factor, num_pred_steps=args.num_pred_steps)
@@ -214,7 +215,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Minimalistic Diffusion Model for Super-resolution')
     parser.add_argument("--run-name", type=str, default='run1', help="Name of the current run.")
     parser.add_argument('--epochs', default=500, type=int, help='Total epochs to train the model')
-    parser.add_argument('--sampling-freq', default=20, type=int, help='How often to save a snapshot')
+    parser.add_argument('--sampling-freq', default=25, type=int, help='How often to save a snapshot')
     parser.add_argument('--batch-size', default=16, type=int, help='Input batch size on each device (default: 32)')
 
     parser.add_argument('--superres', default=True, type=bool, help='Superresolution')
