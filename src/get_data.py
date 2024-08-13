@@ -138,7 +138,7 @@ class NSTK_Cast(torch.utils.data.Dataset):
             
         
         # Select a time index 
-        index = index // 110  
+        index = index // 150  
         
         if self.train:    
             index = index * 4

@@ -34,7 +34,7 @@ def ddp_setup(rank, world_size):
         world_size: Total number of processes
     """
     os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "4231"
+    os.environ["MASTER_PORT"] = "4331"
     init_process_group(backend="nccl", rank=rank, world_size=world_size) #gloo or nccl
     torch.cuda.set_device(rank)
 
@@ -214,7 +214,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Minimalistic Diffusion Model for Super-resolution')
     parser.add_argument("--run-name", type=str, default='run1', help="Name of the current run.")
     parser.add_argument('--epochs', default=500, type=int, help='Total epochs to train the model')
-    parser.add_argument('--sampling-freq', default=50, type=int, help='How often to save a snapshot')
+    parser.add_argument('--sampling-freq', default=20, type=int, help='How often to save a snapshot')
     parser.add_argument('--batch-size', default=16, type=int, help='Input batch size on each device (default: 32)')
 
     parser.add_argument('--superres', default=True, type=bool, help='Superresolution')

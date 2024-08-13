@@ -649,8 +649,8 @@ class UNetModel(nn.Module):
         if self.Reynolds_number is not None:
             self.Reynolds_emb = nn.Sequential(
                 linear(model_channels, time_embed_dim),
-                #nn.SiLU(),
-                #linear(time_embed_dim, time_embed_dim),
+                nn.SiLU(),
+                linear(time_embed_dim, time_embed_dim),
             )           
             
         if self.num_pred_steps is not None:
@@ -871,8 +871,8 @@ def UNet(
 ):
 
     if image_size == 256:
-        #channel_mult = (1, 2, 4, 8)
-        channel_mult =  (1, 1, 2, 2, 4, 4)
+        channel_mult = (1, 2, 4, 8)
+        #channel_mult =  (1, 1, 2, 2, 4, 4)
 
     elif image_size == 512:
         channel_mult = (1, 1, 2, 2, 4, 4)
@@ -896,7 +896,7 @@ def UNet(
         out_channels=out_channels,
         num_res_blocks=2,
         attention_resolutions=tuple(attention_ds),
-        dropout=0.1,
+        dropout=0.15,
         channel_mult=channel_mult,
         num_classes=num_classes,
         use_checkpoint=False,
