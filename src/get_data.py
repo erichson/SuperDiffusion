@@ -82,9 +82,14 @@ class NSTK_SR(torch.utils.data.Dataset):
 class NSTK_Cast(torch.utils.data.Dataset):
     def __init__(self, factor, num_pred_steps=1, patch_size=256, stride = 128, train=True):
         super(NSTK_Cast, self).__init__()
-        self.path1 = '/data/rdl/NSTK/1000_2048_2048_seed_2150.h5'
-        self.path2 = '/data/rdl/NSTK/8000_2048_2048_seed_2150.h5'
-        self.path3 = '/data/rdl/NSTK/16000_2048_2048_seed_2150.h5'
+
+        self.paths = ['/pscratch/sd/v/vmikuni/FM/nskt_tensor/1000_2048_2048_seed_2150.h5', 
+                      '/pscratch/sd/v/vmikuni/FM/nskt_tensor/8000_2048_2048_seed_2150.h5', 
+                      '/pscratch/sd/v/vmikuni/FM/nskt_tensor/16000_2048_2048_seed_2150.h5',
+                      ]
+
+        self.RN = [1000,8000,32000]
+        
         
         
         self.factor = factor
@@ -93,41 +98,23 @@ class NSTK_Cast(torch.utils.data.Dataset):
         self.patch_size = patch_size
         self.stride = stride
         
-        with h5py.File(self.path1, 'r') as f:
+        with h5py.File(self.paths[0], 'r') as f:
             self.data_shape = f['w'].shape
             print(self.data_shape)
     
-        with h5py.File(self.path2, 'r') as f:
-            self.data_shape = f['w'].shape
-            print(self.data_shape)
-
-        with h5py.File(self.path3, 'r') as f:
-            self.data_shape = f['w'].shape
-            print(self.data_shape)
-
-
         self.max_row = (self.data_shape[1] - self.patch_size) // self.stride + 1
         self.max_col = (self.data_shape[2] - self.patch_size) // self.stride + 1    
 
     
     def open_hdf5(self):
-        h5_file1 = h5py.File(self.path1, 'r')
-        self.dataset1 = h5_file1['w']
-
-        h5_file2 = h5py.File(self.path2, 'r')
-        self.dataset2 = h5_file2['w']        
-
-        h5_file3 = h5py.File(self.path3, 'r')
-        self.dataset3 = h5_file3['w']         
-
+        self.datasets = [h5py.File(path, 'r')['w'] for path in self.paths]
 
 
     def __getitem__(self, index):
         if not hasattr(self, 'dataset'):
             self.open_hdf5()
  
-             
-            
+                         
         # Randomly select to super-resolve or forecast
         superres = np.random.choice([True, False], size=1)[0]
         
@@ -153,28 +140,23 @@ class NSTK_Cast(torch.utils.data.Dataset):
         
         
         # Randomly select a dataset (Re=1000 or Re=16000)
-        Reynolds_number = np.random.choice([1000, 8000, 16000], size=1)[0]
+
+        random_dataset = np.random.randint(0, len(self.paths))
         
-        if Reynolds_number == 1000:
-            dataset = self.dataset1
-        elif Reynolds_number == 8000:
-            dataset = self.dataset2
-        elif Reynolds_number == 16000:
-            dataset = self.dataset3
-            
-            
+        Reynolds_number = self.RN[random_dataset]
+        dataset = self.datasets[random_dataset]
+                                
         patch = torch.from_numpy(dataset[index, patch_row:(patch_row + self.patch_size), patch_col:(patch_col + self.patch_size)]).float().unsqueeze(0)
         target = torch.from_numpy(dataset[index + shift, patch_row:(patch_row + self.patch_size), patch_col:(patch_col + self.patch_size)]).float().unsqueeze(0)
             
-
         if superres:
             lr_patch = patch[:, ::self.factor, ::self.factor]
-            return lr_patch, patch * 0, target, torch.tensor(shift), torch.tensor(Reynolds_number)
+            return lr_patch, patch * 0, target, torch.tensor(shift), torch.tensor(Reynolds_number/40_000.)
         else:
             lr_patch = patch[:, ::self.factor, ::self.factor]
-            return lr_patch * 0, patch, target, torch.tensor(shift), torch.tensor(Reynolds_number)
+            return lr_patch * 0, patch, target, torch.tensor(shift), torch.tensor(Reynolds_number/40_000.)
 
     def __len__(self):
-        return  45000 #30000 #self.length      
+        return  40000 #30000 #self.length      
     
     
