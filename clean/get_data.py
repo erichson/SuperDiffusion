@@ -10,6 +10,7 @@ import numpy as np
 import torch
 import h5py
 import os
+import torch.nn.functional as F
             
 class NSTK(torch.utils.data.Dataset):
     def __init__(self,
@@ -21,9 +22,9 @@ class NSTK(torch.utils.data.Dataset):
                  scratch_dir='./'):
         super(NSTK, self).__init__()
         
-        self.paths = [os.path.join(scratch_dir,'1000_2048_2048_seed_3407.h5'),
+        self.paths = [os.path.join(scratch_dir,'1000_2048_2048_seed_2150.h5'),
                       os.path.join(scratch_dir,'8000_2048_2048_seed_2150.h5'),
-                      os.path.join(scratch_dir,'32000_2048_2048_seed_2150.h5'),
+                      os.path.join(scratch_dir,'16000_2048_2048_seed_2150.h5'),
                       ]
 
         self.RN = [1000,8000,32000]
@@ -69,12 +70,12 @@ class NSTK(torch.utils.data.Dataset):
         
         Reynolds_number = self.RN[random_dataset]
         dataset = self.datasets[random_dataset]
+
             
-            
-        patch = torch.from_numpy(dataset[index, patch_row:(patch_row + self.patch_size), patch_col:(patch_col + self.patch_size)]).float().unsqueeze(0)        
+        patch = torch.from_numpy(dataset[index, patch_row:(patch_row + self.patch_size), patch_col:(patch_col + self.patch_size)]).float().unsqueeze(0) 
         future_patch = torch.from_numpy(dataset[index + shift, patch_row:(patch_row + self.patch_size), patch_col:(patch_col + self.patch_size)]).float().unsqueeze(0)            
         lowres_patch = patch[:, ::self.factor, ::self.factor]
-        return lowres_patch, patch, future_patch,  torch.tensor(shift), torch.tensor(Reynolds_number/100_000.)
+        return lowres_patch, patch, future_patch,  F.one_hot(torch.tensor(shift),self.num_pred_steps), torch.tensor(Reynolds_number/40_000.)
 
     def __len__(self):
         return  45000 #30000 #self.length      

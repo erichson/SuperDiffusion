@@ -80,7 +80,7 @@ class GaussianDiffusionModel(nn.Module):
 
         # We should predict the "error term" from this snapshots_t. Loss is what we return.
         predicted = self.base_model(residual_snapshots_t, _ts,
-                                    s=torch.cat([s,s],0), Re=torch.cat([Reynolds_number,Reynolds_number],0))
+                                    Re=torch.cat([Reynolds_number,Reynolds_number],0))
         
         predicted_SR, predicted_FC = torch.split(predicted,predicted.shape[0]//2,0)
         _ts_SR, _ts_FC = torch.split(_ts,predicted.shape[0]//2,0)
@@ -89,7 +89,7 @@ class GaussianDiffusionModel(nn.Module):
         predicted_SR = self.lowres_model(predicted_SR, _ts_SR)
         
         predicted_FC = torch.cat([predicted_FC, snapshots], dim=1)
-        predicted_FC = self.forecast_model(predicted_FC, _ts_FC)
+        predicted_FC = self.forecast_model(predicted_FC, _ts_FC, s = s)
         
 
         predicted = torch.cat([predicted_SR,predicted_FC],0)
@@ -119,10 +119,10 @@ class GaussianDiffusionModel(nn.Module):
         if superres:
             conditional = nn.functional.interpolate(conditioning_snapshots[0:snapshots_i.shape[0]], 
                                                     size=[snapshots_i.shape[2], snapshots_i.shape[3]], 
-                                                    mode='bilinear')
+                                                    mode='bilinear').to(device)
             model_head = self.lowres_model
         else:
-            conditional = conditioning_snapshots
+            conditional = conditioning_snapshots.to(device)
             model_head = self.forecast_model
 
         if self.sampler == 'ddpm':  
@@ -135,9 +135,10 @@ class GaussianDiffusionModel(nn.Module):
                 
                 pred = self.base_model(snapshots_i,
                                       torch.tensor(i / self.n_T).to(device).repeat(n_sample),
-                                      s=s, Re=Reynolds_number)
+                                      Re=Reynolds_number)
                 pred = torch.cat([pred, conditional], dim=1)
-                pred = model_head(pred,torch.tensor(i / self.n_T).to(device).repeat(n_sample))
+                pred = model_head(pred,torch.tensor(i / self.n_T).to(device).repeat(n_sample),
+                                  s = None if superres else s)
 
 
                 if self.prediction_type == 'eps':
@@ -160,9 +161,9 @@ class GaussianDiffusionModel(nn.Module):
 
                 pred = self.base_model(snapshots_i,
                                       time.to(device),
-                                      s=s, Re=Reynolds_number)
+                                      Re=Reynolds_number)
                 pred = torch.cat([pred, conditional], dim=1)
-                pred = model_head(pred, time.to(device),)
+                pred = model_head(pred, time.to(device),s = None if superres else s)
 
                 if self.prediction_type == 'v':                    
                     mean = alpha * snapshots_i - sigma * pred
@@ -173,7 +174,7 @@ class GaussianDiffusionModel(nn.Module):
                 elif self.prediction_type == 'eps':
                     mean = (snapshots_i - sigma * pred) / alpha
                     eps = pred
-                    
+                
                 snapshots_i = alpha_ * mean + sigma_ * eps
 
             #Replace last prediction with the mean value
@@ -182,9 +183,7 @@ class GaussianDiffusionModel(nn.Module):
 
 
         return snapshots_i + conditional
-
-    
-    
+        
     
 def logsnr_schedule_cosine(t, logsnr_min=-20., logsnr_max=20.):
     b = torch.atan(torch.exp(-0.5 * torch.tensor(logsnr_max)))
@@ -193,11 +192,11 @@ def logsnr_schedule_cosine(t, logsnr_min=-20., logsnr_max=20.):
 
 
 def get_logsnr_alpha_sigma(time):
-    logsnr = logsnr_schedule_cosine(time)
-    alpha = torch.sqrt(torch.sigmoid(logsnr))[:,None,None,None]
-    sigma = torch.sqrt(torch.sigmoid(-logsnr))[:,None,None,None]
+    logsnr = logsnr_schedule_cosine(time)[:,None,None,None]
+    alpha = torch.sqrt(torch.sigmoid(logsnr))
+    sigma = torch.sqrt(torch.sigmoid(-logsnr))
 
-    return logsnr, alpha, sigma    
+    return 0.5*logsnr, alpha, sigma    
     
 
 def ddpm_schedules(beta1: float, beta2: float, T: int) -> Dict[str, torch.Tensor]:

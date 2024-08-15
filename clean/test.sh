@@ -7,7 +7,7 @@ module load pytorch
 
 # for DDP
 export MASTER_ADDR=$(hostname)
-cmd="python train.py --run-name ddim_v_multinode_$@ --prediction-type v --sampler ddim --time-steps 5 --multi-node --batch-size 4 --base-width $@"
+cmd="python train.py --run-name ddim_v_multinode_$@ --prediction-type v --sampler ddim --time-steps 5 --multi-node --batch-size 16 --base-width $@"
 
 set -x
 srun -l -u \

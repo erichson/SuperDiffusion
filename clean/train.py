@@ -218,6 +218,7 @@ class Trainer:
 
 
     def train(self):
+        best_loss = np.inf
         for epoch in range(self.startEpoch,self.max_epochs):
             if is_initialized():
                 self.train_data.sampler.set_epoch(epoch)
@@ -235,18 +236,22 @@ class Trainer:
                     self.run.log({"val_loss": self.logs['val_loss']})
                     self.run.log({"train_loss": self.logs['train_loss']})
 
-            
-            if self.gpu_id == 0 and epoch == 0:
-                self._save_checkpoint(epoch+1,self.checkpoint_path)
-                self._generate_samples(epoch+1)
 
-            if self.gpu_id == 0 and (epoch + 1) % self.sampling_freq == 0:
-                self._save_checkpoint(epoch+1,self.checkpoint_path)
-                self._generate_samples(epoch+1)
+            if self.gpu_id == 0:                
+                if epoch == 0:
+                    self._save_checkpoint(epoch+1,self.checkpoint_path)
+                    self._generate_samples(epoch+1)
+                                
+                if (epoch + 1) % self.sampling_freq == 0:
+                    self._generate_samples(epoch+1)
+                    
+                if self.logs['val_loss'] < best_loss:
+                    print("replacing best checkpoint ...")
+                    self._save_checkpoint(epoch+1,self.checkpoint_path)
+                    best_loss = self.logs['val_loss']
+                    
                 
-            if self.gpu_id == 0 and (epoch + 1) == self.max_epochs:
-                self._save_checkpoint(epoch+1,self.checkpoint_path)
-                self._generate_samples(epoch+1)                
+                
 
 
 def load_train_objs(args):
@@ -318,8 +323,8 @@ if __name__ == "__main__":
     parser.add_argument("--run-name", type=str, default='run1', help="Name of the current run.")
     parser.add_argument("--scratch-dir", type=str, default='/pscratch/sd/v/vmikuni/FM/nskt_tensor/', help="Name of the current run.")
     parser.add_argument('--epochs', default=300, type=int, help='Total epochs to train the model')
-    parser.add_argument('--sampling-freq', default=10, type=int, help='How often to save a snapshot')
-    parser.add_argument('--batch-size', default=4, type=int, help='Input batch size on each device (default: 32)')
+    parser.add_argument('--sampling-freq', default=30, type=int, help='How often to save a snapshot')
+    parser.add_argument('--batch-size', default=16, type=int, help='Input batch size on each device (default: 32)')
 
     parser.add_argument('--num-pred-steps', default=3, type=int, help='different prediction steps to condition on')
 

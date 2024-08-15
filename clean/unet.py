@@ -98,27 +98,6 @@ def normalization(channels):
     return GroupNorm32(32, channels)
 
 
-def timestep_embedding(timesteps, dim, max_period=10000):
-    """
-    Create sinusoidal timestep embeddings.
-
-    :param timesteps: a 1-D Tensor of N indices, one per batch element.
-                      These may be fractional.
-    :param dim: the dimension of the output.
-    :param max_period: controls the minimum frequency of the embeddings.
-    :return: an [N x dim] Tensor of positional embeddings.
-    """
-    half = dim // 2
-    freqs = th.exp(
-        -math.log(max_period) * th.arange(start=0, end=half, dtype=th.float32) / half
-    ).to(device=timesteps.device)
-    args = timesteps[:, None].float() * freqs[None]
-    embedding = th.cat([th.cos(args), th.sin(args)], dim=-1)
-    if dim % 2:
-        embedding = th.cat([embedding, th.zeros_like(embedding[:, :1])], dim=-1)
-    return embedding
-
-
 class MPFourier(nn.Module):
     def __init__(self, num_channels, bandwidth=1):
         super().__init__()
@@ -577,52 +556,7 @@ def get_decoder(
         out_ch,
         conv_resample,        
 ):
-    output_blocks = nn.ModuleList([])
-    chans = input_block_chans.copy()
-    for level, mult in list(enumerate(channel_mult))[::-1]:
-        for i in range(num_res_blocks + 1):
-            ich = chans.pop()
-            layers = [
-                ResBlock(
-                    ch + ich,
-                    time_embed_dim,
-                    dropout,
-                    out_channels=int(model_channels * mult),
-                    dims=dims,
-                    use_checkpoint=use_checkpoint,
-                    use_scale_shift_norm=use_scale_shift_norm,
-                )
-            ]
-            ch = int(model_channels * mult)
-            if ds in attention_resolutions:
-                layers.append(
-                    AttentionBlock(
-                        ch,
-                        use_checkpoint=use_checkpoint,
-                        num_heads=num_heads_upsample,
-                        num_head_channels=num_head_channels,
-                        use_new_attention_order=use_new_attention_order,
-                    )
-                )
-            if level and i == num_res_blocks:
-                out_ch = ch
-                layers.append(
-                    ResBlock(
-                        ch,
-                        time_embed_dim,
-                        dropout,
-                        out_channels=out_ch,
-                        dims=dims,
-                        use_checkpoint=use_checkpoint,
-                        use_scale_shift_norm=use_scale_shift_norm,
-                        up=True,
-                    )
-                    if resblock_updown
-                    else Upsample(ch, conv_resample, dims=dims, out_channels=out_ch)
-                )
-                ds //= 2
-            output_blocks.append(TimestepEmbedSequential(*layers))
-
+    
     return output_blocks,ch
 
 class ResNetModel(nn.Module):
@@ -638,6 +572,7 @@ class ResNetModel(nn.Module):
             channel_mult,
             dims = 2,
             dropout = 0,
+            num_pred_steps = 0,
             use_checkpoint=False,
             use_fp16=False,
             use_scale_shift_norm=False,
@@ -649,6 +584,7 @@ class ResNetModel(nn.Module):
         self.out_channels = out_channels
         self.channel_mult = channel_mult
         self.dtype = th.float16 if use_fp16 else th.float32
+        self.num_pred_steps = num_pred_steps
         
         time_embed_dim = model_channels * 4
 
@@ -658,6 +594,13 @@ class ResNetModel(nn.Module):
             linear(time_embed_dim, time_embed_dim),
         )
 
+
+        if self.num_pred_steps > 0:
+            self.step_emb = nn.Sequential(
+                linear(self.num_pred_steps, time_embed_dim),
+                nn.SiLU(),
+                linear(time_embed_dim, time_embed_dim),
+            )
         
         ch = int(channel_mult[0] * model_channels)
         self.encode_lowres = nn.ModuleList(
@@ -687,9 +630,18 @@ class ResNetModel(nn.Module):
         )
 
         self.emb = MPFourier(self.model_channels)
-    def forward(self, x, t):
+    def forward(self, x, t, s = None):
 
+        assert (s is not None) == (
+            self.num_pred_steps > 0
+        ), "must specify the number of different prediction steps above 0 if the model is time step conditional"
+        
         emb = self.time_embed(self.emb(t))
+
+        if self.num_pred_steps > 0:
+            assert s.shape == (x.shape[0],self.num_pred_steps)
+            emb = emb + self.step_emb(s.to(th.float32))
+        
         h = x.type(self.dtype)
         for module in self.encode_lowres:
             h = module(h, emb)
@@ -794,9 +746,6 @@ class UNetModel(nn.Module):
                 linear(time_embed_dim, time_embed_dim),
             )           
             
-        if self.num_pred_steps is not None:
-            self.pred_steps_emb = nn.Embedding(num_pred_steps, time_embed_dim)
-
         ch = input_ch = int(channel_mult[0] * model_channels)            
         self.input_blocks = nn.ModuleList(
             [TimestepEmbedSequential(conv_nd(dims, self.in_channels, ch, 3, padding=1))]
@@ -887,29 +836,55 @@ class UNetModel(nn.Module):
         self._feature_size += ch
 
         
-        self.output_blocks, ch = get_decoder(
-            channel_mult,
-            num_res_blocks,
-            input_block_chans,
-            ch,ds,
-            time_embed_dim,
-            model_channels,
-            resblock_updown,
-            dims,
-            use_checkpoint,
-            use_scale_shift_norm,
-            attention_resolutions,
-            num_heads_upsample,
-            num_head_channels,
-            use_new_attention_order,
-            dropout,
-            out_ch,
-            conv_resample,
-        )
+        self.output_blocks = nn.ModuleList([])
+        chans = input_block_chans.copy()
+        for level, mult in list(enumerate(channel_mult))[::-1]:
+            for i in range(num_res_blocks + 1):
+                ich = chans.pop()
+                layers = [
+                    ResBlock(
+                        ch + ich,
+                        time_embed_dim,
+                        dropout,
+                        out_channels=int(model_channels * mult),
+                        dims=dims,
+                        use_checkpoint=use_checkpoint,
+                        use_scale_shift_norm=use_scale_shift_norm,
+                    )
+                ]
+                ch = int(model_channels * mult)
+                if ds in attention_resolutions:
+                    layers.append(
+                        AttentionBlock(
+                            ch,
+                            use_checkpoint=use_checkpoint,
+                            num_heads=num_heads_upsample,
+                            num_head_channels=num_head_channels,
+                            use_new_attention_order=use_new_attention_order,
+                        )
+                    )
+                if level and i == num_res_blocks:
+                    out_ch = ch
+                    layers.append(
+                        ResBlock(
+                            ch,
+                            time_embed_dim,
+                            dropout,
+                            out_channels=out_ch,
+                            dims=dims,
+                            use_checkpoint=use_checkpoint,
+                            use_scale_shift_norm=use_scale_shift_norm,
+                            up=True,
+                        )
+                        if resblock_updown
+                        else Upsample(ch, conv_resample, dims=dims, out_channels=out_ch)
+                    )
+                    ds //= 2
+                self.output_blocks.append(TimestepEmbedSequential(*layers))
 
         self.emb = MPFourier(self.model_channels)
 
-    def forward(self, x, timesteps, s=None, Re=None, y=None):
+    def forward(self, x, timesteps, Re=None, y=None):
         """
         Apply the model to an input batch.
 
@@ -922,9 +897,6 @@ class UNetModel(nn.Module):
             self.num_classes is not None
         ), "must specify y if and only if the model is class-conditional"
 
-        assert (s is not None) == (
-            self.num_pred_steps is not None
-        ), "must specify the number of different prediction steps if and only if the model is time step conditional"
 
         assert (Re is not None) == (
             self.Reynolds_number is not None
@@ -938,11 +910,8 @@ class UNetModel(nn.Module):
             emb = emb + self.label_emb(y)
             
         if self.Reynolds_number is not None:
-            emb = emb + self.Reynolds_emb(timestep_embedding(Re, self.model_channels))
-            
-        if self.num_pred_steps is not None:
-            assert s.shape == (x.shape[0],)
-            emb = emb + self.pred_steps_emb(s)            
+            emb = emb + self.Reynolds_emb(self.emb(Re))
+                    
             
         h = x.type(self.dtype)
         for module in self.input_blocks:
@@ -969,13 +938,13 @@ def UNet(
     base_width=128,
     num_classes=None,
     Reynolds_number=False,
-    num_pred_steps=None,
+    num_pred_steps=0,
 
 ):
 
     if image_size == 256:
-        #channel_mult = (1, 2, 4, 8)
-        channel_mult =  (1, 1, 2, 2, 4, 4)
+        channel_mult = (1, 2, 4, 8)
+        #channel_mult =  (1, 1, 2, 2, 4, 4)
 
     elif image_size == 512:
         channel_mult = (1, 1, 2, 2, 4, 4)
@@ -1004,14 +973,15 @@ def UNet(
                               )
 
     past_cond = ResNetModel(image_size=image_size,
-                              in_channels=channel_mult[0]*base_width,
-                              model_channels=base_width,
-                              out_channels=out_channels,
-                              channel_mult=(1, 2, 4),
-                              use_checkpoint=False,
-                              use_fp16=False,
-                              use_scale_shift_norm=True,
-                              )
+                            in_channels=channel_mult[0]*base_width,
+                            model_channels=base_width,
+                            out_channels=out_channels,
+                            channel_mult=(1, 2, 4),
+                            num_pred_steps = num_pred_steps,
+                            use_checkpoint=False,
+                            use_fp16=False,
+                            use_scale_shift_norm=True,
+                            )
 
 
     return UNetModel(
