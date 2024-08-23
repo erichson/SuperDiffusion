@@ -6,6 +6,7 @@ Created on Fri Jul  5 15:11:28 2024
 @author: ben
 """
 
+import os
 import numpy as np
 import torch
 import h5py
@@ -83,12 +84,14 @@ class NSTK_Cast(torch.utils.data.Dataset):
     def __init__(self, factor, num_pred_steps=1, patch_size=256, stride = 128, train=True):
         super(NSTK_Cast, self).__init__()
 
-        self.paths = ['../data/NSTK/1000_2048_2048_seed_2150.h5', 
+        self.paths = ['../data/NSTK/2000_2048_2048_seed_2150.h5',
+                      '../data/NSTK/4000_2048_2048_seed_2150.h5', 
                       '../data/NSTK/8000_2048_2048_seed_2150.h5', 
                       '../data/NSTK/16000_2048_2048_seed_2150.h5',
+                      '../data/NSTK/32000_2048_2048_seed_2150.h5',
                       ]
 
-        self.RN = [1000,8000,16000]
+        self.RN = [2000,4000,8000,16000,32000]
         
         
         
@@ -125,10 +128,10 @@ class NSTK_Cast(torch.utils.data.Dataset):
             
         
         # Select a time index 
-        index = index // 130  
+        index = index // 75  
         
         if self.train:    
-            index = index * 4
+            index = index * 2
         else:
             index = index * 2 + 1            
             
@@ -157,6 +160,6 @@ class NSTK_Cast(torch.utils.data.Dataset):
             return lr_patch * 0, patch, target, torch.tensor(shift), torch.tensor(Reynolds_number/40_000.)
 
     def __len__(self):
-        return  45000 #30000 #self.length      
+        return  55000 #30000 #self.length      
     
     
