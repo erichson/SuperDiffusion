@@ -576,8 +576,7 @@ class UNetModel(nn.Module):
     :param conv_resample: if True, use learned convolutions for upsampling and
         downsampling.
     :param dims: determines if the signal is 1D, 2D, or 3D.
-    :param num_classes: if specified (as an int), then this model will be
-        class-conditional with `num_classes` classes.
+
     :param use_checkpoint: use gradient checkpointing to reduce memory usage.
     :param num_heads: the number of attention heads in each attention layer.
     :param num_heads_channels: if specified, ignore num_heads and instead use
@@ -602,7 +601,6 @@ class UNetModel(nn.Module):
         channel_mult=(1, 2, 4, 8),
         conv_resample=True,
         dims=2,
-        num_classes=None,
         use_checkpoint=False,
         use_fp16=False,
         num_heads=1,
@@ -614,7 +612,7 @@ class UNetModel(nn.Module):
         superres = False,
         forecast = False,
         Reynolds_number = False,
-        num_pred_steps = None
+        num_pred_steps = None,
     ):
         super().__init__()
 
@@ -638,7 +636,6 @@ class UNetModel(nn.Module):
         self.dropout = dropout
         self.channel_mult = channel_mult
         self.conv_resample = conv_resample
-        self.num_classes = num_classes
         self.Reynolds_number = Reynolds_number
         self.use_checkpoint = use_checkpoint
         self.dtype = th.float16 if use_fp16 else th.float32
@@ -657,15 +654,12 @@ class UNetModel(nn.Module):
             nn.SiLU(),
             linear(time_embed_dim, time_embed_dim),
         )
-        
-        if self.num_classes is not None:
-            self.label_emb = nn.Embedding(num_classes, time_embed_dim)
             
         if self.Reynolds_number is not None:
             self.Reynolds_emb = nn.Sequential(
                 linear(model_channels, time_embed_dim),
-                nn.SiLU(),
-                linear(time_embed_dim, time_embed_dim),
+                #nn.SiLU(),
+                #linear(time_embed_dim, time_embed_dim),
             )           
             
         if self.num_pred_steps is not None:
@@ -676,6 +670,7 @@ class UNetModel(nn.Module):
         self.input_blocks = nn.ModuleList(
             [TimestepEmbedSequential(conv_nd(dims, self.in_channels, ch, 3, padding=1))]
         )
+        
         self._feature_size = ch
         input_block_chans = [ch]
         ds = 1
@@ -740,15 +735,13 @@ class UNetModel(nn.Module):
                 use_checkpoint=use_checkpoint,
                 use_scale_shift_norm=use_scale_shift_norm,
             ),
-# =============================================================================
-#             AttentionBlock(
-#                 ch,
-#                 use_checkpoint=use_checkpoint,
-#                 num_heads=num_heads,
-#                 num_head_channels=num_head_channels,
-#                 use_new_attention_order=use_new_attention_order,
-#             ),
-# =============================================================================
+            # AttentionBlock(
+            #     ch,
+            #     use_checkpoint=use_checkpoint,
+            #     num_heads=num_heads,
+            #     num_head_channels=num_head_channels,
+            #     use_new_attention_order=use_new_attention_order,
+            # ),
             ResBlock(
                 ch,
                 time_embed_dim,
@@ -814,7 +807,7 @@ class UNetModel(nn.Module):
 
 
 
-    def forward(self, x, timesteps, lowres_snapshot=None, past_snapshot=None, s=None, Re=None, y=None):
+    def forward(self, x, timesteps, lowres_snapshots=None, previous_snapshots=None, s=None, Re=None):
         """
         Apply the model to an input batch.
 
@@ -823,9 +816,6 @@ class UNetModel(nn.Module):
         :param y: an [N] Tensor of labels, if class-conditional.
         :return: an [N x C x ...] Tensor of outputs.
         """
-        assert (y is not None) == (
-            self.num_classes is not None
-        ), "must specify y if and only if the model is class-conditional"
 
         assert (s is not None) == (
             self.num_pred_steps is not None
@@ -840,22 +830,18 @@ class UNetModel(nn.Module):
         hs = []
         emb = self.time_embed(self.emb(timesteps))
 
-        if lowres_snapshot is not None:
-            x = th.cat([x, lowres_snapshot], dim=1)
+        if lowres_snapshots is not None:
+            x = th.cat([x, lowres_snapshots], dim=1)
             
-        if past_snapshot is not None: 
-            x = th.cat([x, past_snapshot], dim=1)
-                        
-        if self.num_classes is not None:
-            assert y.shape == (x.shape[0],)
-            emb = emb + self.label_emb(y)
+        if previous_snapshots is not None: 
+            x = th.cat([x, previous_snapshots], dim=1)
             
         if self.Reynolds_number is not None:
             emb = emb + self.Reynolds_emb(timestep_embedding(Re, self.model_channels))
             
         if self.num_pred_steps is not None:
             assert s.shape == (x.shape[0],)
-            emb = emb + self.pred_steps_emb(s)            
+            emb = emb + self.pred_steps_emb(s)      
             
         h = x.type(self.dtype)
         for module in self.input_blocks:
@@ -877,12 +863,10 @@ def UNet(
     in_channels=1,
     out_channels=1,
     base_width=128,
-    num_classes=None,
     superres=False,
     forecast=False,
     Reynolds_number=False,
     num_pred_steps=None,
-
 ):
 
     if image_size == 256:
@@ -913,10 +897,9 @@ def UNet(
         attention_resolutions=tuple(attention_ds),
         dropout=0.15,
         channel_mult=channel_mult,
-        num_classes=num_classes,
         use_checkpoint=False,
         use_fp16=False,
-        num_heads=4,
+        num_heads=8,
         num_head_channels=64,
         num_heads_upsample=-1,
         use_scale_shift_norm=True,
