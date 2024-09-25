@@ -68,6 +68,9 @@ class Trainer:
         self.lr_scheduler.step()
         # self.model.module.ema.update()
         loss_value = loss.item()
+        # print(f"Rank {self.gpu_id} | Loss {loss_value}")
+        # if self.gpu_id == 0:
+        #     self.run.log({"step_loss": loss_value})
         return loss_value
         
 
@@ -78,6 +81,8 @@ class Trainer:
             conditioning_snapshots = conditioning_snapshots.to(self.gpu_id)
             targets = targets.to(self.gpu_id)      
             loss_values.append(self._run_batch(targets, conditioning_snapshots))
+            if self.gpu_id == 0:
+                print(f"progress = {len(loss_values)}/{len(self.train_data)} - mean_loss = {np.mean(loss_values)}")
         return loss_values
 
     def _save_checkpoint(self, epoch):
@@ -88,7 +93,7 @@ class Trainer:
         }
         if not os.path.exists("./checkpoints"):
                 os.makedirs("./checkpoints")
-        PATH = "./checkpoints/" + "checkpoint_" + self.run_name + ".pt"
+        PATH = "./checkpoints/" + "checkpoint_" + self.run_name + str(epoch) + ".pt"
         torch.save(save_dict, PATH)
         print(f"Epoch {epoch} | Training checkpoint saved at {PATH}")
 
@@ -120,10 +125,10 @@ class Trainer:
             num_warmup_steps=len(self.train_data) * 5, # we need only a very shot warmup phase for our data
             num_training_steps=(len(self.train_data) * max_epochs),
         )
-        #print(len(self.train_data))
 
         
         self.model.train()
+        
         for epoch in range(max_epochs):
             loss_values = []
             loss_values.append(self._run_epoch(epoch))
@@ -131,15 +136,17 @@ class Trainer:
             if self.gpu_id == 0:
                 avg_loss = np.mean(loss_values)
                 print(f"Epoch {epoch} | loss {avg_loss} | learning rate {self.lr_scheduler.get_last_lr()}")
-                self.run.log({"loss": avg_loss})
+                self.run.log({"epoch_loss": avg_loss})
 
             
             if self.gpu_id == 0 and epoch == 0:
+                print(f"Init Epoch | Saving checkpoint and generating samples")
                 self._save_checkpoint(epoch+1)
                 self._generate_samples(epoch+1)
 
             
             if self.gpu_id == 0 and (epoch + 1) % self.sampling_freq == 0:
+                print(f"Epoch {epoch+1} | Saving checkpoint and generating samples")
                 self._save_checkpoint(epoch+1)
                 self._generate_samples(epoch+1)
 
@@ -155,7 +162,7 @@ def load_train_objs(superres, args):
     #                window_size=8, img_range=1., depths=[6, 6, 6, 6, 6, 6],
     #                embed_dim=256, num_heads=[8,8,8,8,8,8], mlp_ratio=4, upsampler='pixelshuffle',
     #                upscale=args.factor,resi_connection='1conv') #img_range dose nothing here
-    model = HAT(img_size=64, patch_size=1, in_chans=1,
+    model = HAT(img_size=32, patch_size=1, in_chans=1,
                 window_size=8, img_range=1., depths=[6, 6, 6, 6, 6, 6],
                 embed_dim=256, num_heads=[8,8,8,8,8,8], mlp_ratio=4, upsampler='pixelshuffle',
                 upscale=args.factor, resi_connection='1conv') #TODO
@@ -189,6 +196,24 @@ def prepare_dataloader(dataset: Dataset, batch_size: int):
 
 def main(rank: int, world_size: int, sampling_freq: int, epochs: int, batch_size: int, run, args):
     
+     # Initialize W&B only on the main process (rank 0)
+    run = run
+    wandb.login()
+    
+    if rank == 0:
+        run = wandb.init(
+            project="HAT-SR-NERSC",
+            name=args.run_name,
+            config={
+                "learning_rate": args.learning_rate,
+                "epochs": args.epochs,
+                "batch size": args.batch_size,
+                "upsampling factor": args.factor,
+            },
+        )
+    else:
+        run = None
+    
     ddp_setup(rank, world_size)
     dataset, model, optimizer = load_train_objs(superres=args.superres, args=args)
     
@@ -199,13 +224,17 @@ def main(rank: int, world_size: int, sampling_freq: int, epochs: int, batch_size
     print('**** Setup ****')
     print('Total params: %.2fM' % (sum(p.numel() for p in model.parameters())/1000000.0))
     print('************')
-    print(model)
+    # print(model)
 
     
     train_data = prepare_dataloader(dataset, batch_size)
     trainer = Trainer(model, train_data, optimizer, rank, sampling_freq, run, run_name=args.run_name)
+    
+    print(f"Rank {rank} | Training started")
     trainer.train(epochs)
     destroy_process_group()
+    if rank == 0:
+        wandb.finish()  # Close W&B only in the main process
 
 
 if __name__ == "__main__":
@@ -214,11 +243,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Minimalistic Diffusion Model for Super-resolution')
     parser.add_argument("--run-name", type=str, default='hat_sr_1', help="Name of the current run.")
     parser.add_argument('--epochs', default=500, type=int, help='Total epochs to train the model')
-    parser.add_argument('--sampling-freq', default=50, type=int, help='How often to save a snapshot')
-    parser.add_argument('--batch-size', default=8, type=int, help='Input batch size on each device (default: 16)')
+    parser.add_argument('--sampling-freq', default=5, type=int, help='How often to save a snapshot')
+    parser.add_argument('--batch-size', default=32, type=int, help='Input batch size on each device (default: 16)')
 
     parser.add_argument('--superres', default=True, type=bool, help='Superresolution')
-    parser.add_argument('--factor', default=4, type=int, help='upsampling factor')
+    parser.add_argument('--factor', default=8, type=int, help='upsampling factor')
 
     parser.add_argument('--learning-rate', default=2e-4, type=int, help='learning rate')
 
@@ -231,22 +260,8 @@ if __name__ == "__main__":
     # Launch processes.
     print('Launching processes...')
     
-    wandb.login()
-    
-    run = wandb.init(
-        # Set the project where this run will be logged
-        project="HAT-SR",
-        name=args.run_name,
-        # Track hyperparameters and run metadata
-        config={
-            "learning_rate": args.learning_rate,
-            "epochs": args.epochs,
-            "batch size": args.batch_size,
-            "upsampling factor": args.factor,
-        },
-    )
-    
-    print(args.factor)
+    print(f"Run name: {args.run_name}, sampling freq: {args.sampling_freq}, epochs: {args.epochs}, batch size: {args.batch_size}")
+
     
     world_size = torch.cuda.device_count()
-    mp.spawn(main, args=(world_size, args.sampling_freq, args.epochs, args.batch_size, run, args), nprocs=world_size)
+    mp.spawn(main, args=(world_size, args.sampling_freq, args.epochs, args.batch_size, None, args), nprocs=world_size)

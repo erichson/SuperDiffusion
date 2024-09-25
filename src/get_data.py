@@ -84,12 +84,14 @@ class NSTK_Cast(torch.utils.data.Dataset):
     def __init__(self, factor, num_pred_steps=1, patch_size=256, stride = 128, train=True):
         super(NSTK_Cast, self).__init__()
 
-        self.paths = ['/data/rdl/NSTK/2000_2048_2048_seed_2150.h5',
-                      '/data/rdl/NSTK/4000_2048_2048_seed_2150.h5', 
-                      '/data/rdl/NSTK/8000_2048_2048_seed_2150.h5', 
-                      '/data/rdl/NSTK/16000_2048_2048_seed_2150.h5',
-                      '/data/rdl/NSTK/32000_2048_2048_seed_2150.h5',
+        self.root = '/global/cfs/cdirs/m4633/foundationmodel/nskt_tensor/'
+        self.paths = ['2000_2048_2048_seed_2150.h5',
+                      '4000_2048_2048_seed_2150.h5', 
+                      '8000_2048_2048_seed_2150.h5', 
+                      '16000_2048_2048_seed_2150.h5',
+                      '32000_2048_2048_seed_2150.h5',
                       ]
+        self.paths = [os.path.join(self.root, path) for path in self.paths]
 
         self.RN = [2000,4000,8000,16000,32000]
         
