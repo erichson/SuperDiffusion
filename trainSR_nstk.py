@@ -82,7 +82,8 @@ class Trainer:
             targets = targets.to(self.gpu_id)      
             loss_values.append(self._run_batch(targets, conditioning_snapshots))
             if self.gpu_id == 0:
-                print(f"progress = {len(loss_values)}/{len(self.train_data)} - mean_loss = {np.mean(loss_values)}")
+                print(f"Epoch: {epoch} - {len(loss_values)}/{len(self.train_data)} - loss = {np.mean(loss_values):.4f}")
+                self.run.log({"step_loss": np.mean(loss_values)})
         return loss_values
 
     def _save_checkpoint(self, epoch):
@@ -198,9 +199,9 @@ def main(rank: int, world_size: int, sampling_freq: int, epochs: int, batch_size
     
      # Initialize W&B only on the main process (rank 0)
     run = run
-    wandb.login()
     
     if rank == 0:
+        wandb.login()
         run = wandb.init(
             project="HAT-SR-NERSC",
             name=args.run_name,
