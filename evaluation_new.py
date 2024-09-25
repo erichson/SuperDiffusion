@@ -158,13 +158,14 @@ if __name__ == "__main__":
     # Load Model
     
     ### !!!
-    checkpoint_path = "/pscratch/sd/y/yanggao/SuperDiffusion/checkpoints/checkpoint_multi-savetest15.pt"
+    checkpoint_path = "/pscratch/sd/y/yanggao/SuperDiffusion/checkpoints/checkpoint_multi-savetest1.pt"
     
     model = HAT(img_size=32, patch_size=1, in_chans=1,
             window_size=8, img_range=1., depths=[6, 6, 6, 6, 6, 6],
             embed_dim=256, num_heads=[8,8,8,8,8,8], mlp_ratio=4, upsampler='pixelshuffle',
             upscale=args.factor, resi_connection='1conv') #TODO
 
+    print(f'Loading model from {checkpoint_path}')
     checkpoint = torch.load(checkpoint_path, weights_only=True)
     # optimizer.load_state_dict(checkpoint["optimizer"])
     # model.eps_model.load_state_dict(checkpoint["model"])
@@ -201,49 +202,51 @@ if __name__ == "__main__":
         RFNE_error = []
         print(f'Number of batches: {len(testloader)}')
         # with model.module.ema.average_parameters():
-        with model.ema.average_parameters():
-            with torch.no_grad():
-                model.eval()
+        # with model.ema.average_parameters():
+        with torch.no_grad():
+            model.eval()
 
-                for i, (conditioning_snapshots, conditioning_snapshots2, targets, s, dat_class) in enumerate(testloader):
+            for i, (conditioning_snapshots, conditioning_snapshots2, targets, s, dat_class) in enumerate(testloader):
 
-                    print(i)
-                    conditioning_snapshots = conditioning_snapshots.to('cuda')
-                    conditioning_snapshots2 = conditioning_snapshots2.to('cuda')
-                    s = s.to('cuda')
-                    dat_class = dat_class.to('cuda')
+                print(i)
+                conditioning_snapshots = conditioning_snapshots.to('cuda')
+                conditioning_snapshots2 = conditioning_snapshots2.to('cuda')
+                s = s.to('cuda')
+                dat_class = dat_class.to('cuda')
 
-                    predictions = model.sample(conditioning_snapshots.shape[0],
-                                               (1, args.target_resolution,
-                                                args.target_resolution),
-                                               conditioning_snapshots, 
-                                               conditioning_snapshots2, 
-                                               s, 
-                                               dat_class,
-                                               'cuda')
+                # predictions = model.upsample(conditioning_snapshots.shape[0],
+                #                             (1, args.target_resolution,
+                #                             args.target_resolution),
+                #                             conditioning_snapshots, 
+                #                             conditioning_snapshots2, 
+                #                             s, 
+                #                             dat_class,
+                #                             'cuda')
+                
+                predictions = model(conditioning_snapshots)
 
-                    for j in range(predictions.shape[0]):
-                        error = np.linalg.norm(predictions[j, 0, :, :].cpu().numpy(
-                        ) - targets[j, 0, :, :].cpu().numpy()) / np.linalg.norm(targets[j, 0, :, :].cpu().numpy())
-                        RFNE_error.append(error)
-                    print(np.mean(RFNE_error))
+                for j in range(predictions.shape[0]):
+                    error = np.linalg.norm(predictions[j, 0, :, :].cpu().numpy(
+                    ) - targets[j, 0, :, :].cpu().numpy()) / np.linalg.norm(targets[j, 0, :, :].cpu().numpy())
+                    RFNE_error.append(error)
+                print(np.mean(RFNE_error))
 
-                    if i == 0:
-                        samples = {
-                            'conditioning_snapshots': conditioning_snapshots.cpu().detach().numpy(),
-                            'targets': targets.cpu().detach().numpy(),
-                            'predictions': predictions.cpu().detach().numpy()
-                        }
+                if i == 0:
+                    samples = {
+                        'conditioning_snapshots': conditioning_snapshots.cpu().detach().numpy(),
+                        'targets': targets.cpu().detach().numpy(),
+                        'predictions': predictions.cpu().detach().numpy()
+                    }
 
-                        if not os.path.exists("./samples"):
-                            os.makedirs("./samples")
+                    if not os.path.exists("./samples"):
+                        os.makedirs("./samples")
 
-                        np.save(
-                            f'samples/samples_superres_RE_{args.Reynolds_number}_SR_{args.sampler}_{args.time_steps}_unet_{args.base_width}_' + str(i+1) + '.npy', samples)
-                        print('saved samples')
+                    np.save(
+                        f'samples/samples_superres_RE_HAT_' + str(i+1) + '.npy', samples)
+                    print('saved samples')
 
-                    #if i == 10:
-                    #    break
+                #if i == 10:
+                #    break
 
         avg_RFNE = np.mean(RFNE_error)
         print(f'Average RFNE={avg_RFNE}')
