@@ -4,6 +4,10 @@
 __pycache__/
 *.py[cod]
 *$py.class
+train_samples*/
+wandb/
+checkpoints/
+samples/
 
 # C extensions
 *.so

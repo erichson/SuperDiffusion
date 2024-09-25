@@ -285,9 +285,7 @@ class GaussianDiffusionModelCast(nn.Module):
 
             #Replace last prediction with the mean value
             snapshots_i = mean
-
-
-
+            
         return snapshots_i + conditioning_snapshots_interpolated + past_snapshots
 
     
