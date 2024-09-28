@@ -8,6 +8,7 @@ train_samples*/
 wandb/
 checkpoints/
 samples/
+*.out
 
 # C extensions
 *.so

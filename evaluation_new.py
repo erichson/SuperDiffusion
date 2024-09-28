@@ -158,7 +158,8 @@ if __name__ == "__main__":
     # Load Model
     
     ### !!!
-    checkpoint_path = "/pscratch/sd/y/yanggao/SuperDiffusion/checkpoints/checkpoint_multi-savetest1.pt"
+    checkpoint_path = "checkpoints/checkpoint_full092550.pt"
+    save_name = "samples_superres_HAT092550_"
     
     model = HAT(img_size=32, patch_size=1, in_chans=1,
             window_size=8, img_range=1., depths=[6, 6, 6, 6, 6, 6],
@@ -170,6 +171,12 @@ if __name__ == "__main__":
     # optimizer.load_state_dict(checkpoint["optimizer"])
     # model.eps_model.load_state_dict(checkpoint["model"])
     # model.ema.load_state_dict(checkpoint["ema"])
+    state_dict = checkpoint["model"]
+    new_state_dict = {}
+    for key, value in state_dict.items():
+            new_key = key.replace("module.", "")  # Remove "module." prefix
+            new_state_dict[new_key] = value
+    model.load_state_dict(new_state_dict)
 
     # set seed
     seed = 0
@@ -242,7 +249,7 @@ if __name__ == "__main__":
                         os.makedirs("./samples")
 
                     np.save(
-                        f'samples/samples_superres_RE_HAT_' + str(i+1) + '.npy', samples)
+                        f'samples/' + save_name + str(i+1) + '.npy', samples)
                     print('saved samples')
 
                 #if i == 10:

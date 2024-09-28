@@ -57,9 +57,14 @@ class Trainer:
         self.criterion = torch.nn.MSELoss(reduction='mean')
 
     def _run_batch(self, targets, conditioning_snapshots):
-        self.optimizer.zero_grad()
+        # Ensure the inputs are moved to the correct device (GPU)
+        conditioning_snapshots = conditioning_snapshots.to(self.gpu_id)
+        targets = targets.to(self.gpu_id)
+        
+        self.optimizer.zero_grad()  # Clear previous gradients
         outputs = self.model(conditioning_snapshots)
-        targets = targets
+        
+                
         # print("***********!!!!!***********")   
         # print(targets.shape, outputs.shape, conditioning_snapshots.shape)  
         loss = self.criterion(outputs.flatten(),targets.flatten())
@@ -94,7 +99,7 @@ class Trainer:
         }
         if not os.path.exists("./checkpoints"):
                 os.makedirs("./checkpoints")
-        PATH = "./checkpoints/" + "checkpoint_" + self.run_name + str(epoch) + ".pt"
+        PATH = "./checkpoints/" + "checkpoint_" + self.run_name + "_" + str(epoch) + ".pt"
         torch.save(save_dict, PATH)
         print(f"Epoch {epoch} | Training checkpoint saved at {PATH}")
 
@@ -138,6 +143,7 @@ class Trainer:
                 avg_loss = np.mean(loss_values)
                 print(f"Epoch {epoch} | loss {avg_loss} | learning rate {self.lr_scheduler.get_last_lr()}")
                 self.run.log({"epoch_loss": avg_loss})
+                self.run.log({"Epoch": epoch})
 
             
             if self.gpu_id == 0 and epoch == 0:
@@ -152,7 +158,7 @@ class Trainer:
                 self._generate_samples(epoch+1)
 
 
-def load_train_objs(superres, args):
+def load_train_objs(superres, args, rank=None):
     #train_set = NSTK(path='data/16000_2048_2048_seed_3407_w.h5', factor=args.factor)
     train_set = NSTK(num_pred_steps=0, factor=args.factor)
     
@@ -168,20 +174,41 @@ def load_train_objs(superres, args):
                 embed_dim=256, num_heads=[8,8,8,8,8,8], mlp_ratio=4, upsampler='pixelshuffle',
                 upscale=args.factor, resi_connection='1conv') #TODO
     
-    # def print_layer_output_shape(module, input, output):
-    #     print(f"Layer: {module.__class__.__name__}")
-    #     print(f"  Input shape: {input[0].shape}")   # Input is a tuple, usually we care about the first element
-    #     print(f"  Output shape: {output.shape}")
-    #     print("-" * 40)
-        
-    # def register_hooks(model):
-    #     for layer in model.children():  # Register hook for each layer
-    #         layer.register_forward_hook(print_layer_output_shape)
-
-    # register_hooks(model)
+    # Load checkpoint
+    checkpoint_path = 'checkpoints/checkpoint_full092550.pt'
     
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
-    return train_set, model, optimizer
+    if checkpoint_path: 
+        checkpoint = torch.load(checkpoint_path)
+        
+        # Load model state dictionary
+        model.load_state_dict(checkpoint['model'], strict=False)  # Set strict=False to handle missing keys
+        print(f'Model loaded from checkpoint {checkpoint_path}') 
+        
+        # def print_layer_output_shape(module, input, output):
+        #     print(f"Layer: {module.__class__.__name__}")
+        #     print(f"  Input shape: {input[0].shape}")   # Input is a tuple, usually we care about the first element
+        #     print(f"  Output shape: {output.shape}")
+        #     print("-" * 40)
+            
+        # def register_hooks(model):
+        #     for layer in model.children():  # Register hook for each layer
+        #         layer.register_forward_hook(print_layer_output_shape)
+
+        # register_hooks(model)
+        
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        # Move optimizer state to the same device (GPU)
+        for state in optimizer.state.values():
+            for k, v in state.items():
+                if isinstance(v, torch.Tensor):
+                    state[k] = v.to(rank)
+                    
+        return train_set, model, optimizer
+
+    else:
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+        return train_set, model, optimizer
 
 
 def prepare_dataloader(dataset: Dataset, batch_size: int):
@@ -216,7 +243,7 @@ def main(rank: int, world_size: int, sampling_freq: int, epochs: int, batch_size
         run = None
     
     ddp_setup(rank, world_size)
-    dataset, model, optimizer = load_train_objs(superres=args.superres, args=args)
+    dataset, model, optimizer = load_train_objs(superres=args.superres, args=args, rank=rank)
     
     
     #==============================================================================
