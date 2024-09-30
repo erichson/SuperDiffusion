@@ -158,7 +158,7 @@ if __name__ == "__main__":
     # Load Model
     
     ### !!!
-    checkpoint_path = "checkpoints/checkpoint_full092550.pt"
+    checkpoint_path = "/pscratch/sd/y/yanggao/SuperDiffusion/checkpoints/checkpoint_full0929cont_1.pt"
     save_name = "samples_superres_HAT092550_"
     
     model = HAT(img_size=32, patch_size=1, in_chans=1,

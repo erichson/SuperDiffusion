@@ -177,33 +177,49 @@ def load_train_objs(superres, args, rank=None):
     # Load checkpoint
     checkpoint_path = 'checkpoints/checkpoint_full092550.pt'
     
+    
     if checkpoint_path: 
         checkpoint = torch.load(checkpoint_path)
         
-        # Load model state dictionary
-        model.load_state_dict(checkpoint['model'], strict=False)  # Set strict=False to handle missing keys
-        print(f'Model loaded from checkpoint {checkpoint_path}') 
+        # Get the model's state_dict keys
+        model_state_keys = model.state_dict().keys()
+        total_model_keys = len(model_state_keys)
+        print(f"Total number of keys in the model: {total_model_keys}")
         
-        # def print_layer_output_shape(module, input, output):
-        #     print(f"Layer: {module.__class__.__name__}")
-        #     print(f"  Input shape: {input[0].shape}")   # Input is a tuple, usually we care about the first element
-        #     print(f"  Output shape: {output.shape}")
-        #     print("-" * 40)
-            
-        # def register_hooks(model):
-        #     for layer in model.children():  # Register hook for each layer
-        #         layer.register_forward_hook(print_layer_output_shape)
+        # Get the checkpoint's state_dict keys
+        state_dict = checkpoint["model"]
+        new_state_dict = {}
+        for key, value in state_dict.items():
+                new_key = key.replace("module.", "")  # Remove "module." prefix
+                new_state_dict[new_key] = value
+        checkpoint['model'] = new_state_dict
+        
+        checkpoint_state_keys = checkpoint['model'].keys()
+        total_checkpoint_keys = len(checkpoint_state_keys)
+        print(f"Total number of keys in the checkpoint: {total_checkpoint_keys}")
+        
+        # Load model state dictionary and capture missing/unexpected keys
+        load_result = model.load_state_dict(checkpoint['model'], strict=False)  # Set strict=False to handle missing keys
+        
+        print(f'Model loaded from checkpoint {checkpoint_path}')
+        
+        # Check and print missing keys and unexpected keys
+        missing_keys_count = len(load_result.missing_keys)
+        unexpected_keys_count = len(load_result.unexpected_keys)
+        
+        print(f"Missing keys: {missing_keys_count} / {total_model_keys}")
+        print(f"Unexpected keys: {unexpected_keys_count} / {total_checkpoint_keys}")
 
-        # register_hooks(model)
-        
+        # Initialize optimizer
         optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
         optimizer.load_state_dict(checkpoint['optimizer'])
+        
         # Move optimizer state to the same device (GPU)
         for state in optimizer.state.values():
             for k, v in state.items():
                 if isinstance(v, torch.Tensor):
                     state[k] = v.to(rank)
-                    
+
         return train_set, model, optimizer
 
     else:
