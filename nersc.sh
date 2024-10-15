@@ -13,4 +13,4 @@ source /pscratch/sd/y/yanggao/SuperDiffusion/venv/bin/activate
 
 cd /pscratch/sd/y/yanggao/SuperDiffusion
 export CUDA_VISIBLE_DEVICES=0,1,2,3  # Set visible GPUs
-python3 trainSR_nstk.py --run-name full0930cont --sampling-fre 10 --epochs 100
+python3 trainSR_nstk.py --run-name full1001cont --sampling-fre 10 --epochs 100

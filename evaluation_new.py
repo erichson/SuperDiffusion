@@ -158,7 +158,7 @@ if __name__ == "__main__":
     # Load Model
     
     ### !!!
-    checkpoint_path = "/pscratch/sd/y/yanggao/SuperDiffusion/checkpoints/checkpoint_full0929cont_1.pt"
+    checkpoint_path = "/pscratch/sd/y/yanggao/SuperDiffusion/checkpoints/checkpoint_full0930cont_60.pt"
     save_name = "samples_superres_HAT092550_"
     
     model = HAT(img_size=32, patch_size=1, in_chans=1,
@@ -208,6 +208,7 @@ if __name__ == "__main__":
 
         RFNE_error = []
         print(f'Number of batches: {len(testloader)}')
+        print(f"Reynolds number: {args.Reynolds_number}")
         # with model.module.ema.average_parameters():
         # with model.ema.average_parameters():
         with torch.no_grad():
@@ -249,7 +250,7 @@ if __name__ == "__main__":
                         os.makedirs("./samples")
 
                     np.save(
-                        f'samples/' + save_name + str(i+1) + '.npy', samples)
+                        f'samples/' + save_name + str(i+1) + str(args.Reynolds_number) +'.npy', samples)
                     print('saved samples')
 
                 #if i == 10:

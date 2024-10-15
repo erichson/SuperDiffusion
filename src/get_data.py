@@ -168,3 +168,143 @@ class NSTK_Cast(torch.utils.data.Dataset):
         return  55000 #30000 #self.length      
     
     
+    
+
+class SB_weather(torch.utils.data.Dataset):
+    def __init__(self, factor, num_pred_steps=1, patch_size=256, stride=128, train=True):
+        super(SB_weather, self).__init__()
+
+        self.root = '/global/cfs/cdirs/m4633/foundationmodel/climate/train/'
+        self.paths = [
+            '2010.h5',
+            '2008.h5',
+            '2013.h5',
+            '2011.h5'
+        ]
+        self.paths = [os.path.join(self.root, path) for path in self.paths]
+
+        self.factor = factor
+        self.num_pred_steps = num_pred_steps
+        self.train = train
+        self.patch_size = patch_size
+        self.stride = stride
+
+        with h5py.File(self.paths[0], 'r') as f:
+            self.data_shape = f['fields'].shape
+            print(self.data_shape)
+    
+        self.max_row = (self.data_shape[2] - self.patch_size) // self.stride + 1
+        self.max_col = (self.data_shape[3] - self.patch_size) // self.stride + 1    
+
+    def open_hdf5(self):
+        self.datasets = [h5py.File(path, 'r')['fields'] for path in self.paths]
+
+    def __getitem__(self, index):
+        if not hasattr(self, 'datasets'):
+            self.open_hdf5()
+        
+        superres = True
+        
+        if superres:
+            shift = 0
+        else:
+            shift = 1
+        
+        index = index // 75
+
+        if self.train:    
+            index = index * 2
+        else:
+            index = index * 2 + 1
+
+        # Randomly select a patch from the image
+        patch_row = np.random.randint(0, self.max_row) * self.stride
+        patch_col = np.random.randint(0, self.max_col) * self.stride
+        
+        # Randomly select a dataset (e.g., 2008, 2010, 2011, 2013)
+        random_dataset = np.random.randint(0, len(self.paths))
+        dataset = self.datasets[random_dataset]
+        
+        # Select a specific channel (e.g., channel 0, 1, or 2)
+        channel = np.random.randint(0, 3)
+        
+        # Extract the patch and the target
+        patch = torch.from_numpy(dataset[index, channel, patch_row:(patch_row + self.patch_size), patch_col:(patch_col + self.patch_size)]).float().unsqueeze(0)
+        target = torch.from_numpy(dataset[index + shift, channel, patch_row:(patch_row + self.patch_size), patch_col:(patch_col + self.patch_size)]).float().unsqueeze(0)
+
+        if superres:
+            lr_patch = patch[:, ::self.factor, ::self.factor]
+            return lr_patch, target, torch.tensor(shift), torch.tensor(channel)
+        else:
+            lr_patch = patch[:, ::self.factor, ::self.factor]
+            return lr_patch * 0, patch, target, torch.tensor(shift), torch.tensor(channel)
+
+    def __len__(self):
+        return 55000
+    
+class E5(torch.utils.data.Dataset):
+    def __init__(self,
+                 factor,
+                 num_pred_steps=1,
+                 patch_size=256,
+                 stride = 128,
+                 train=True,
+                 scratch_dir='./'):
+        super(E5, self).__init__()
+
+        scratch_dir = '/global/cfs/cdirs/m4633/foundationmodel/climate/train/'
+        self.paths = [os.path.join(scratch_dir,'2008.h5'),
+                      os.path.join(scratch_dir,'2010.h5'),
+                      os.path.join(scratch_dir,'2011.h5'),
+                      os.path.join(scratch_dir,'2013.h5'),
+                      ]
+        self.RN = [0.0,0.0,0.0,0.0]
+        
+        self.factor = factor
+        self.num_pred_steps = num_pred_steps
+        self.train = train
+        self.patch_size = patch_size
+        self.stride = stride
+        self.open_hdf5()
+        with h5py.File(self.paths[0], 'r') as f:
+            self.data_shape = f['fields'][:,1].shape
+
+        self.max_row = (self.data_shape[1] - self.patch_size) // self.stride + 1
+        self.max_col = (self.data_shape[2] - self.patch_size) // self.stride + 1
+
+
+    def open_hdf5(self):
+        self.datasets = [h5py.File(path, 'r')['fields'] for path in self.paths]
+
+    def __getitem__(self, index):
+        if not hasattr(self, 'dataset'):
+            self.open_hdf5()
+
+        shift = np.random.randint(1, self.num_pred_steps + 1, 1)[0]
+
+        # Select a time index                                                                                                                                                                                       
+        index = index // 75
+
+        # Randomly select a patch from the image                                                                                                                                                                    
+
+        patch_row = np.random.randint(0, self.max_row) * self.stride
+        patch_col = np.random.randint(0, self.max_col) * self.stride
+
+        #Select one of the training files                                                                                                                                                                           
+        random_dataset = np.random.randint(0, len(self.paths))
+
+        Reynolds_number = self.RN[random_dataset]
+        dataset = self.datasets[random_dataset]
+        patch = torch.from_numpy(dataset[index, 1, patch_row:(patch_row + self.patch_size), patch_col:(patch_col + self.patch_size)]).float().unsqueeze(0)
+        #patch = self.transform(patch)                                                                                                                                                                              
+        future_patch = torch.from_numpy(dataset[index + shift,1, patch_row:(patch_row + self.patch_size), patch_col:(patch_col + self.patch_size)]).float().unsqueeze(0)
+
+        lowres_patch = patch[:,None, ::self.factor, ::self.factor]
+        lowres_patch =  F.interpolate(lowres_patch,
+                                      size=[patch.shape[1], patch.shape[2]],
+                                      mode='bicubic')[:,0]
+
+        return lowres_patch, patch, future_patch,  F.one_hot(torch.tensor(shift-1),self.num_pred_steps), torch.tensor(Reynolds_number/40000.)
+
+    def __len__(self):
+        return  27150

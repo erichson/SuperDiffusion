@@ -17,11 +17,12 @@ from torch.distributed import init_process_group, destroy_process_group
 
 from diffusers.optimization import get_linear_schedule_with_warmup as scheduler
 
-
-from src.swinIR_FC import SwinIR
+from src.afnonet import AFNONet
+# from src.swinIR_FC import SwinIR
 # from src.unet import UNet
 # from src.diffusion_model import GaussianDiffusionModelCast 
-from src.get_data import NSTK_Cast as NSTK
+# from src.get_data import NSTK_Cast as NSTK
+from src.get_data import E5
 from src.plotting import plot_samples
 
 
@@ -155,12 +156,9 @@ class Trainer:
            
 
 def load_train_objs(superres, args):
-    train_set = NSTK(factor=args.factor, num_pred_steps=args.num_pred_steps)
+    train_set = E5(factor=args.factor, num_pred_steps=args.num_pred_steps)
     
-    model = SwinIR(img_size=32, patch_size=1, in_chans=1,
-                   window_size=8, img_range=1., depths=[6, 6, 6, 6, 6, 6],
-                   embed_dim=128, num_heads=[8,8,8,8,8,8], mlp_ratio=2, upsampler='pixelshuffle',
-                   upscale=8, resi_connection='1conv') #img_range dose nothing here
+    model = AFNONet(img_size=(720, 1440), patch_size=(4,4), in_chans=3, out_chans=3)
     
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     return train_set, model, optimizer

@@ -175,7 +175,7 @@ def load_train_objs(superres, args, rank=None):
                 upscale=args.factor, resi_connection='1conv') #TODO
     
     # Load checkpoint
-    checkpoint_path = 'checkpoints/checkpoint_full092550.pt'
+    checkpoint_path = '/pscratch/sd/y/yanggao/SuperDiffusion/checkpoints/checkpoint_full0930cont_60.pt'
     
     
     if checkpoint_path: 
