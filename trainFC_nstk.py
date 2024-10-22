@@ -55,14 +55,14 @@ class Trainer:
         self.train_data = train_data
         self.optimizer = optimizer
         self.sampling_freq = sampling_freq
-        self.model = DDP(model, device_ids=[gpu_id])
+        self.model = DDP(model, device_ids=[gpu_id], find_unused_parameters=True)
         self.run = run
         self.run_name = run_name
         self.criterion = torch.nn.MSELoss(reduction='mean')
 
     def _run_batch(self, targets, conditioning_lr_snapshots, past_snapshots, s, Reynolds_number):
         self.optimizer.zero_grad()
-        outputs = self.model(conditioning_lr_snapshots,past_snapshots)
+        outputs = self.model(past_snapshots)
         loss = self.criterion(outputs.flatten(),targets.flatten())
         loss.backward()
         self.optimizer.step()
@@ -83,6 +83,9 @@ class Trainer:
 
             targets = targets.to(self.gpu_id)            
             loss_values.append(self._run_batch(targets, conditioning_lr_snapshots, past_snapshots, s, Reynolds_number))
+            if self.gpu_id == 0:
+                print(f"Epoch: {epoch} - {len(loss_values)}/{len(self.train_data)} - loss = {np.mean(loss_values):.4f}")
+                self.run.log({"step_loss": np.mean(loss_values)})
         return loss_values
 
     def _save_checkpoint(self, epoch):
@@ -93,7 +96,7 @@ class Trainer:
         }
         if not os.path.exists("./checkpoints"):
                 os.makedirs("./checkpoints")
-        PATH = "./checkpoints/" + "checkpoint_" + self.run_name + ".pt"
+        PATH = "./checkpoints/" + "checkpoint_" + self.run_name + "_" + str(epoch) + ".pt"
         torch.save(save_dict, PATH)
         print(f"Epoch {epoch} | Training checkpoint saved at {PATH}")
 
@@ -113,7 +116,7 @@ class Trainer:
                 past_snapshots = past_snapshots.to('cuda')
                 s = s.to('cuda')
                 Reynolds_number = Reynolds_number.to('cuda')
-                samples = self.model(conditioning_lr_snapshots, past_snapshots)
+                samples = self.model(past_snapshots)
                      
             
             plot_samples(samples, conditioning_lr_snapshots, targets, PATH, epoch)
@@ -138,27 +141,40 @@ class Trainer:
             if self.gpu_id == 0:
                 avg_loss = np.mean(loss_values)
                 print(f"Epoch {epoch} | loss {avg_loss} | learning rate {self.lr_scheduler.get_last_lr()}")
-                self.run.log({"loss": avg_loss})
+                self.run.log({"epoch_loss": avg_loss})
+                self.run.log({"Epoch": epoch})
 
                 if best_mse > avg_loss:
-                     self._save_checkpoint(epoch+1)
+                     # self._save_checkpoint(epoch+1)
                      best_mse = avg_loss
             
             if self.gpu_id == 0 and epoch == 0:
+                print(f"Init Epoch | Saving checkpoint and generating samples")
+                self._save_checkpoint(epoch+1)
                 self._generate_samples(epoch+1)
 
             if self.gpu_id == 0 and (epoch + 1) % self.sampling_freq == 0:
+                print(f"Epoch {epoch+1} | Saving checkpoint and generating samples")
+                self._save_checkpoint(epoch+1)
                 self._generate_samples(epoch+1)
                 
             if self.gpu_id == 0 and (epoch + 1) == max_epochs:
                 self._generate_samples(epoch+1)                
 
+class Params:
+    def __init__(self, patch_size, in_chans, out_chans):
+        self.patch_size = patch_size
+        self.N_in_channels = in_chans
+        self.N_out_channels = out_chans
+        self.num_blocks = 16
+
+params = Params(patch_size=256, in_chans=1, out_chans=1)
            
 
 def load_train_objs(superres, args):
     train_set = E5(factor=args.factor, num_pred_steps=args.num_pred_steps)
     
-    model = AFNONet(img_size=(720, 1440), patch_size=(4,4), in_chans=3, out_chans=3)
+    model = AFNONet(params, img_size=(256, 256))
     
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     return train_set, model, optimizer
@@ -180,6 +196,24 @@ def main(rank: int, world_size: int, sampling_freq: int, epochs: int, batch_size
     ddp_setup(rank, world_size)
     dataset, model, optimizer = load_train_objs(superres=args.superres, args=args)
     
+    run = run
+    
+    if rank == 0:
+        wandb.login()
+        run = wandb.init(
+            # Set the project where this run will be logged
+            project="DiffusionFC",
+            name=args.run_name,
+            # Track hyperparameters and run metadata
+            config={
+                "learning_rate": args.learning_rate,
+                "epochs": args.epochs,
+                "batch size": args.batch_size,
+                "upsampling factor": args.factor,
+            },
+        )
+    else:
+        run = None
     
     #==============================================================================
     # Model summary
@@ -194,6 +228,8 @@ def main(rank: int, world_size: int, sampling_freq: int, epochs: int, batch_size
     trainer = Trainer(model, train_data, optimizer, rank, sampling_freq, run, run_name=args.run_name)
     trainer.train(epochs)
     destroy_process_group()
+    if rank == 0:
+        wandb.finish()  # Close W&B only in the main process
 
 
 if __name__ == "__main__":
@@ -203,7 +239,7 @@ if __name__ == "__main__":
     parser.add_argument("--run-name", type=str, default='fc_1step', help="Name of the current run.")
     parser.add_argument('--epochs', default=500, type=int, help='Total epochs to train the model')
     parser.add_argument('--sampling-freq', default=25, type=int, help='How often to save a snapshot')
-    parser.add_argument('--batch-size', default=16, type=int, help='Input batch size on each device (default: 32)')
+    parser.add_argument('--batch-size', default=512, type=int, help='Input batch size on each device (default: 32)')
 
     parser.add_argument('--superres', default=True, type=bool, help='Superresolution')
     parser.add_argument('--forecast', default=True, type=bool, help='Forecasting')
@@ -226,23 +262,9 @@ if __name__ == "__main__":
     # Launch processes.
     print('Launching processes...')
     
-    wandb.login()
-    
-    run = wandb.init(
-        # Set the project where this run will be logged
-        project="DiffusionSR",
-        name=args.run_name,
-        # Track hyperparameters and run metadata
-        config={
-            "learning_rate": args.learning_rate,
-            "epochs": args.epochs,
-            "batch size": args.batch_size,
-            "upsampling factor": args.factor,
-        },
-    )
-    
     world_size = torch.cuda.device_count()
-    mp.spawn(main, args=(world_size, args.sampling_freq, args.epochs, args.batch_size, run, args), nprocs=world_size)
+
+    mp.spawn(main, args=(world_size, args.sampling_freq, args.epochs, args.batch_size, None, args), nprocs=world_size)
 
 
 
