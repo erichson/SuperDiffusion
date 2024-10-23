@@ -7,29 +7,33 @@ Created on Fri Jul  5, 2024
 import torch
 import torch.nn as nn
 from typing import Dict, Tuple
-
+import torch.nn.functional as F
     
 class GaussianDiffusionModel(nn.Module):
     def __init__(
         self,
-        base_model: nn.Module,
+        encoder_model: nn.Module,
+        decoder_model: nn.Module,
         lowres_model: nn.Module,
         forecast_model: nn.Module,
         betas: Tuple[float, float],
         n_T: int,
         prediction_type: str,
         sampler:str,
-        criterion: nn.Module = nn.MSELoss(),
+        sample_loss = False,
+        criterion: nn.Module = nn.L1Loss(),
     ) -> None:
         super(GaussianDiffusionModel, self).__init__()
-        
+
+        self.sample_loss = sample_loss
         self.prediction_type = prediction_type
         assert self.prediction_type in ['v','eps','x'], "ERROR: Prediction not supported. Options are v, eps, x"
         self.sampler = sampler
         assert self.sampler in ['ddpm','ddim'], "ERROR: Sampler not supported. Options are ddpm and ddim"
 
         
-        self.base_model = base_model
+        self.encoder_model = encoder_model
+        self.decoder_model = decoder_model
         self.lowres_model = lowres_model
         self.forecast_model = forecast_model
                 
@@ -47,17 +51,9 @@ class GaussianDiffusionModel(nn.Module):
                 future_snapshots: torch.Tensor,
                 s: torch.Tensor, Reynolds_number:torch.Tensor) -> torch.Tensor:
 
-
-        lowres_snapshots_interpolated = nn.functional.interpolate(lowres_snapshots, 
-                                                                  size=[snapshots.shape[2], snapshots.shape[3]], 
-                                                                  mode='bilinear')
-
-        
-        residual_snapshots_SR = snapshots - lowres_snapshots_interpolated
+        residual_snapshots_SR = snapshots - lowres_snapshots
         residual_snapshots_FC = future_snapshots  - snapshots
-
-        residual_snapshots = torch.cat([residual_snapshots_SR,residual_snapshots_FC],0)
-
+        
         if self.sampler == 'ddpm':
             """
             Forward diffusion: tries to guess the epsilon value from snapshot_t using the model.
@@ -70,59 +66,100 @@ class GaussianDiffusionModel(nn.Module):
             _ts = _ts/self.n_T
             
             
-        elif self.sampler == 'ddim':        
-            _ts = torch.rand(size=(residual_snapshots.shape[0],)).to(residual_snapshots.device)
-            eps = torch.randn_like(residual_snapshots)  # eps ~ N(0, 1)
-            _, alpha, sigma = get_logsnr_alpha_sigma(_ts)
+        elif self.sampler == 'ddim':
+            if self.sample_loss:
+                _ts = torch.ones((residual_snapshots_FC.shape[0],)).to(residual_snapshots_FC.device)
+                
+            else:
+                #_ts = torch.randint(0, self.n_T+1, (residual_snapshots_FC.shape[0],)).to(residual_snapshots_FC.device)/self.n_T
+                _ts = torch.rand(size=(residual_snapshots_FC.shape[0],)).to(residual_snapshots_FC.device)
+                
+            eps = torch.randn_like(residual_snapshots_FC)  # eps ~ N(0, 1)
+            logsnr, alpha, sigma = get_logsnr_alpha_sigma(_ts)
+            
+            
+        residual_snapshots_t_SR = alpha * residual_snapshots_SR + eps * sigma
+        residual_snapshots_t_FC = alpha * residual_snapshots_FC + eps * sigma
+
+        if self.sample_loss:
+            x_pred_SR = self.sample(residual_snapshots_t_SR.shape[0],
+                                    (1, residual_snapshots_t_SR.shape[2], residual_snapshots_t_SR.shape[3]),
+                                    lowres_snapshots, s, Reynolds_number, residual_snapshots_t_SR.device,superres=True)
+            
+            x_pred_FC = self.sample(residual_snapshots_t_FC.shape[0],
+                                    (1, residual_snapshots_t_FC.shape[2], residual_snapshots_t_FC.shape[3]),
+                                    snapshots, s, Reynolds_number, residual_snapshots_t_FC.device)
 
 
-        residual_snapshots_t = alpha * residual_snapshots + eps * sigma
+            predicted = torch.cat([x_pred_SR,x_pred_FC])
+            target = torch.cat([snapshots,future_snapshots])
+            loss_clip = 0
+            
+        else:
+            residual_snapshots_t = torch.cat([residual_snapshots_t_SR,residual_snapshots_t_FC],0)
+            predicted, skip_connections = self.encoder_model(residual_snapshots_t,
+                                                             torch.cat([_ts,_ts]),
+                                                             Re=torch.cat([Reynolds_number,Reynolds_number],0),
+                                                             s = torch.cat([torch.zeros_like(s),s],0)
+                                                             )
+            
+            #Add clip loss to align the bottlenecks
+            pred1,pred2=torch.split(predicted,predicted.shape[0]//2,0)
+            #loss_clip = CLIPLoss(pred1,pred2)
+            residual_snapshots_t_SR, residual_snapshots_t_FC = torch.split(residual_snapshots_t,residual_snapshots_t.shape[0]//2,0)
+        
 
-        # We should predict the "error term" from this snapshots_t. Loss is what we return.
-        predicted = self.base_model(residual_snapshots_t, _ts,
-                                    Re=torch.cat([Reynolds_number,Reynolds_number],0))
-        
-        predicted_SR, predicted_FC = torch.split(predicted,predicted.shape[0]//2,0)
-        _ts_SR, _ts_FC = torch.split(_ts,predicted.shape[0]//2,0)
-        
-        predicted_SR = torch.cat([predicted_SR, lowres_snapshots_interpolated], dim=1)
-        predicted_SR = self.lowres_model(predicted_SR, _ts_SR)
-        
-        predicted_FC = torch.cat([predicted_FC, snapshots], dim=1)
-        predicted_FC = self.forecast_model(predicted_FC, _ts_FC, s = s)
-        
+            head_SR, skips_SR = self.lowres_model(
+                torch.cat([residual_snapshots_t_SR,lowres_snapshots],1),
+                _ts, Re = Reynolds_number)
+            
+            head_FC, skips_FC = self.forecast_model(
+                torch.cat([residual_snapshots_t_FC,snapshots],1),
+                _ts, Re = Reynolds_number, s = s)
 
-        predicted = torch.cat([predicted_SR,predicted_FC],0)
+            skip_head = []
+            for skip_SR, skip_FC in zip(skips_SR,skips_FC):
+                skip_head.append(torch.cat([skip_SR,skip_FC]))
+
+            predicted = self.decoder_model(predicted + torch.cat([head_SR,head_FC]),
+                                           skip_connections, skip_head,
+                                           torch.cat([_ts,_ts]),
+                                           Re=torch.cat([Reynolds_number,Reynolds_number],0),
+                                           s = torch.cat([torch.zeros_like(s),s],0))
+                                    
         
-        # Different predictions schemes
-        if self.prediction_type == 'x':
-            target = residual_snapshots
-        elif self.prediction_type == 'eps':
-            target = eps
-        elif self.prediction_type == 'v':
-            target = alpha * eps - sigma * residual_snapshots
+            # Different predictions schemes
+            if self.prediction_type == 'x':
+                target = torch.cat([residual_snapshots_SR,residual_snapshots_FC],0)
+            elif self.prediction_type == 'eps':            
+                target = eps
+            elif self.prediction_type == 'v':
+                target = torch.cat([alpha * eps - sigma * residual_snapshots_SR,
+                                    alpha * eps - sigma * residual_snapshots_FC],0)
+
+            
+
         
         return self.criterion(predicted, target)
+    #+ loss_clip
 
 
 
-
-    def sample(self, n_sample: int, size,
+    #@torch.compile
+    def sample(self, n_sample: int, size,               
                conditioning_snapshots: torch.Tensor, s: torch.Tensor,
-               Reynolds_number: torch.Tensor, device='cuda',superres = True,) -> torch.Tensor:
+               Reynolds_number: torch.Tensor, device='cuda',superres = False,snapshots_i = None,) -> torch.Tensor:
         """
         Let's sample
         See Alg 2 in https://arxiv.org/pdf/2006.11239
         """
-        snapshots_i = torch.randn(n_sample, *size).to(device)  # x_T ~ N(0, 1)
-        
+        if snapshots_i is None:
+           snapshots_i = torch.randn(n_sample, *size).to(device)  # x_T ~ N(0, 1)
+
+        conditional = conditioning_snapshots.to(device)
         if superres:
-            conditional = nn.functional.interpolate(conditioning_snapshots[0:snapshots_i.shape[0]], 
-                                                    size=[snapshots_i.shape[2], snapshots_i.shape[3]], 
-                                                    mode='bilinear').to(device)
             model_head = self.lowres_model
-        else:
-            conditional = conditioning_snapshots.to(device)
+        else:            
             model_head = self.forecast_model
 
         if self.sampler == 'ddpm':  
@@ -131,14 +168,24 @@ class GaussianDiffusionModel(nn.Module):
                 
                 alpha = self.sqrtab[i]
                 sigma = self.sqrtmab[i]
-
                 
-                pred = self.base_model(snapshots_i,
-                                      torch.tensor(i / self.n_T).to(device).repeat(n_sample),
-                                      Re=Reynolds_number)
-                pred = torch.cat([pred, conditional], dim=1)
-                pred = model_head(pred,torch.tensor(i / self.n_T).to(device).repeat(n_sample),
-                                  s = None if superres else s)
+
+                pred, skip = self.encoder_model(snapshots_i,
+                                                #torch.cat([snapshots_i,conditional],1),
+                                                torch.tensor(i / self.n_T).to(device).repeat(n_sample),
+                                                Re=Reynolds_number,
+                                                s = torch.zeros_like(s) if superres else s
+                                                )
+                pred_head, skip_head = model_head(torch.cat([snapshots_i,conditional],1),
+                                                  torch.tensor(i / self.n_T).to(device).repeat(n_sample),
+                                                  Re = Reynolds_number,
+                                                  s = None if superres else s)
+                
+                pred = self.decoder_model(pred + pred_head, skip, skip_head,
+                                          torch.tensor(i / self.n_T).to(device).repeat(n_sample),
+                                          Re = Reynolds_number,
+                                          s = torch.zeros_like(s) if superres else s)
+
 
 
                 if self.prediction_type == 'eps':
@@ -154,49 +201,105 @@ class GaussianDiffusionModel(nn.Module):
         elif self.sampler == 'ddim':
 
             for time_step in range(self.n_T, 0, -1):
-                time = torch.ones((n_sample,) ) * time_step / self.n_T
-                logsnr, alpha, sigma = get_logsnr_alpha_sigma(time.to(device))
-                logsnr_, alpha_, sigma_ = get_logsnr_alpha_sigma(torch.ones(n_sample,).to(device) * (time_step - 1) / self.n_T)
+                time = torch.ones((n_sample,) ).to(device) * time_step / self.n_T
+                time_ = torch.ones((n_sample,) ).to(device) * (time_step-1) / self.n_T
+                logsnr, alpha, sigma = get_logsnr_alpha_sigma(time)
+                logsnr_, alpha_, sigma_ = get_logsnr_alpha_sigma(time_)
+                
+                pred, skip = self.encoder_model(snapshots_i,
+                                                time.to(device),
+                                                Re=Reynolds_number,
+                                                s = torch.zeros_like(s) if superres else s
+                                                )
+                pred_head, skip_head = model_head(torch.cat([snapshots_i,conditional],1),
+                                                  time.to(device),
+                                                  Re = Reynolds_number,
+                                                  s = None if superres else s)
+                
+                pred = self.decoder_model(pred + pred_head, skip, skip_head,
+                                          time.to(device),
+                                          Re = Reynolds_number,
+                                          s = torch.zeros_like(s) if superres else s)
+                
+                
 
-
-                pred = self.base_model(snapshots_i,
-                                      time.to(device),
-                                      Re=Reynolds_number)
-                pred = torch.cat([pred, conditional], dim=1)
-                pred = model_head(pred, time.to(device),s = None if superres else s)
-
-                if self.prediction_type == 'v':                    
+                if self.prediction_type == 'v':
+                    
                     mean = alpha * snapshots_i - sigma * pred
                     eps = pred * alpha + snapshots_i * sigma
+
                 elif self.prediction_type == 'x':
                     mean = pred
                     eps = (alpha * pred - snapshots_i) / sigma
                 elif self.prediction_type == 'eps':
-                    mean = (snapshots_i - sigma * pred) / alpha
-                    eps = pred
-                
-                snapshots_i = alpha_ * mean + sigma_ * eps
+                    mean = alpha * snapshots_i - sigma * pred
+                    eps = pred * alpha + snapshots_i * sigma
+
+
+                # xvar = 0.1/(2. + torch.exp(logsnr))
+                # zvar = xvar*(alpha_ - alpha*sigma_/sigma)**2
+                # sigma_ = torch.sqrt(sigma_**2 + (256**2/torch.norm(eps,p=2,dim=(1,2,3),keepdim=True))*zvar)
+                snapshots_i = alpha_ * mean + eps * sigma_
+
 
             #Replace last prediction with the mean value
             snapshots_i = mean
 
-
-
+            
+        # if conditional.shape[1] >1:
+        #     conditional = conditional[:,-1,None]
         return snapshots_i + conditional
+
+
+
+def CLIPLoss(emb1,emb2,temperature=1.0):
+    #Flatten the inputs with take mean
+    B, C, H, W = emb1.shape
+    emb1 = emb1.view(B, C, -1).mean(dim=-1)
+    emb2 = emb2.view(B, C, -1).mean(dim=-1)
+
         
+    # Calculating the Loss
+    logits = (emb1 @ emb2.T) / temperature
+    emb1_similarity = emb1 @ emb1.T
+    emb2_similarity = emb2 @ emb2.T
+    targets = F.softmax(
+        (emb1_similarity + emb2_similarity) / 2 * temperature, dim=-1
+    )
+    emb2_loss = cross_entropy(logits, targets, reduction='none')
+    emb1_loss = cross_entropy(logits.T, targets.T, reduction='none')
+    loss =  (emb1_loss + emb2_loss) / 2.0 # shape: (batch_size)
+    return loss.mean()
+
+
+def cross_entropy(preds, targets, reduction='none'):
+    log_softmax = nn.LogSoftmax(dim=-1)
+    loss = (-targets * log_softmax(preds)).sum(1)
+    if reduction == "none":
+        return loss
+    elif reduction == "mean":
+        return loss.mean()
+
     
-def logsnr_schedule_cosine(t, logsnr_min=-20., logsnr_max=20.):
+@torch.compile
+def logsnr_schedule_cosine(t, logsnr_min=-20., logsnr_max=20., shift = 16.):
     b = torch.atan(torch.exp(-0.5 * torch.tensor(logsnr_max)))
     a = torch.atan(torch.exp(-0.5 * torch.tensor(logsnr_min))) - b
-    return -2. * torch.log(torch.tan(a * t + b))
+    return -2. * torch.log(torch.tan(a * t + b)*shift)
+
+def inv_logsnr_schedule_cosine(logsnr, logsnr_min=-20., logsnr_max=20.,shift=16.):
+    b = torch.atan(torch.exp(-0.5 * torch.tensor(logsnr_max)))
+    a = torch.atan(torch.exp(-0.5 * torch.tensor(logsnr_min))) - b
+    return torch.atan(torch.exp(-0.5 * logsnr)/shift)/a -b/a
 
 
+#@torch.compile
 def get_logsnr_alpha_sigma(time):
     logsnr = logsnr_schedule_cosine(time)[:,None,None,None]
     alpha = torch.sqrt(torch.sigmoid(logsnr))
     sigma = torch.sqrt(torch.sigmoid(-logsnr))
 
-    return 0.5*logsnr, alpha, sigma    
+    return logsnr, alpha, sigma    
     
 
 def ddpm_schedules(beta1: float, beta2: float, T: int) -> Dict[str, torch.Tensor]:

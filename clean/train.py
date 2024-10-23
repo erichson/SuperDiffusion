@@ -17,14 +17,14 @@ from torch.distributed import init_process_group, destroy_process_group, barrier
 from torch_ema import ExponentialMovingAverage
 
 
-from diffusers.optimization import get_linear_schedule_with_warmup as scheduler
 from torch.optim import lr_scheduler
 
 from unet import UNet
 from diffusion_model import GaussianDiffusionModel
-from get_data import NSTK
+from get_data import NSKT, E5, Simple
 from plotting import plot_samples
-
+from lion import Lion
+from diffusers.optimization import get_linear_schedule_with_warmup as scheduler
 
 def ddp_setup(local_rank, world_size):
     """
@@ -43,8 +43,9 @@ def ddp_setup(local_rank, world_size):
         #overwrite variables with correct values from env
         local_rank = int(os.environ["LOCAL_RANK"])
         rank = get_rank()
-        
+
     torch.cuda.set_device(local_rank)
+    torch.backends.cudnn.benchmark = True
     return local_rank, rank
 
 
@@ -62,7 +63,9 @@ class Trainer:
         epochs: int,
         run_name: str,
         scratch_dir: str,
-        ema_val = 0.999,
+        ema_val = 0.9999,
+        fine_tune = False,
+        dataset = 'nskt'
     ) -> None:
         self.gpu_id = gpu_id
         self.local_gpu_id = local_gpu_id
@@ -72,25 +75,41 @@ class Trainer:
         self.val_data = val_data
         self.optimizer = optimizer
         self.sampling_freq = sampling_freq
-        self.model = DDP(model, device_ids=[local_gpu_id])
+        self.model = DDP(model, device_ids=[local_gpu_id],
+                         #find_unused_parameters=True
+                         )
         self.run = run
         self.run_name = run_name
+        self.fine_tune = fine_tune
+        if self.fine_tune:
+            self.run_name += '_fine_tune'
+        self.dataset = dataset
         self.logs = {}
         self.startEpoch = 0
+        self.best_loss = np.inf
         self.max_epochs = epochs
         self.checkpoint_dir = os.path.join(scratch_dir,'checkpoints')
-        self.checkpoint_path = os.path.join(self.checkpoint_dir,"checkpoint_" + self.run_name + ".pt")
+        self.checkpoint_path = os.path.join(self.checkpoint_dir,f"checkpoint_{self.dataset}_{self.run_name}.pt")
         self.lr_scheduler = lr_scheduler.CosineAnnealingLR(self.optimizer,
                                                            T_max=self.max_epochs)
-        
+
+        # self.lr_scheduler = scheduler(
+        #     optimizer=self.optimizer,
+        #     num_warmup_steps=len(self.train_data) * 1/get_world_size(), #5, # we need only a very shot warmup phase for our data
+        #     num_training_steps=(len(self.train_data) * self.max_epochs//get_world_size()),
+        # )
+                
         if os.path.isfile(self.checkpoint_path):
             if self.gpu_id ==0: print(f"Loading checkpoint from {self.checkpoint_path}")
             self._restore_checkpoint(self.checkpoint_path)
+        elif self.fine_tune:
+            pretrained_checkpoint = self.checkpoint_path.replace(f"{self.dataset}","nskt").replace("_fine_tune","")
+            if self.gpu_id ==0: print(f"Loading pretrained checkpoint from {pretrained_checkpoint}")
+            self._restore_checkpoint(pretrained_checkpoint,restore_all=False)
 
     def train_one_epoch(self):
         tr_time = 0
         self.model.train()
-        
         # buffers for logs
         logs_buff = torch.zeros((1), dtype=torch.float32, device=self.local_gpu_id)
         self.logs['train_loss'] = logs_buff[0].view(-1)
@@ -104,11 +123,13 @@ class Trainer:
             Reynolds_number = Reynolds_number.to(self.local_gpu_id)
             snapshots = snapshots.to(self.local_gpu_id)
             
-            self.optimizer.zero_grad()
+            self.optimizer.zero_grad(set_to_none=True)
+
             loss = self.model(lowres_snapshots,snapshots, future_snapshots, s, Reynolds_number)
             
             loss.backward()
             self.optimizer.step()
+            
             self.ema.update()
  
             # add all the minibatch losses
@@ -163,12 +184,14 @@ class Trainer:
 
     def _save_checkpoint(self, epoch,PATH):
         save_dict = {
-            'basemodel': self.model.module.base_model.state_dict(),
+            'basemodel': self.model.module.encoder_model.state_dict(),
             'lowres_model': self.model.module.lowres_model.state_dict(),
             'forecast_model': self.model.module.forecast_model.state_dict(),
+            'decoder_model': self.model.module.decoder_model.state_dict(),
             'ema': self.ema.state_dict(),
             'optimizer': self.optimizer.state_dict(),
             'epoch':epoch,
+            'loss':self.best_loss,
             'sched': self.lr_scheduler.state_dict(),
         }
 
@@ -178,18 +201,22 @@ class Trainer:
         torch.save(save_dict, PATH)
         print(f"Epoch {epoch} | Training checkpoint saved at {PATH}")
 
-    def _restore_checkpoint(self,PATH):
+    def _restore_checkpoint(self,PATH,restore_all = True):
         checkpoint = torch.load(PATH, map_location='cuda:{}'.format(self.local_gpu_id))
 
-        self.model.module.base_model.load_state_dict(checkpoint["basemodel"])
+        self.model.module.encoder_model.load_state_dict(checkpoint["basemodel"])
         self.model.module.lowres_model.load_state_dict(checkpoint["lowres_model"])
         self.model.module.forecast_model.load_state_dict(checkpoint["forecast_model"])
+        self.model.module.decoder_model.load_state_dict(checkpoint["decoder_model"])
         self.ema.load_state_dict(checkpoint["ema"])
 
-        self.startEpoch = checkpoint['epoch'] + 1
-        self.optimizer.load_state_dict(checkpoint['optimizer'])
-        if 'sched' in checkpoint:
-            self.lr_scheduler.load_state_dict(checkpoint['sched'])
+        if restore_all:
+            self.startEpoch = checkpoint['epoch'] + 1
+            if 'loss' in checkpoint:
+                self.best_loss = checkpoint['loss']                
+            self.optimizer.load_state_dict(checkpoint['optimizer'])
+            if 'sched' in checkpoint:
+                self.lr_scheduler.load_state_dict(checkpoint['sched'])
 
     
     def _generate_samples(self, epoch):
@@ -207,18 +234,17 @@ class Trainer:
                 s = s.to('cuda')
                 Reynolds_number = Reynolds_number.to('cuda')
 
-            
+                
                 samples = self.model.module.sample(snapshots.shape[0],
                                                    (1, snapshots.shape[2], snapshots.shape[3]), 
                                                    lowres_snapshots, s, Reynolds_number,'cuda')
                      
             
-        plot_samples(samples, lowres_snapshots, snapshots, PATH, epoch)
+        plot_samples(samples, lowres_snapshots, snapshots[:,-1,None], PATH, epoch)
         print(f"Epoch {epoch} | Generated samples saved at {PATH}")
 
 
     def train(self):
-        best_loss = np.inf
         for epoch in range(self.startEpoch,self.max_epochs):
             if is_initialized():
                 self.train_data.sampler.set_epoch(epoch)
@@ -237,45 +263,64 @@ class Trainer:
                     self.run.log({"train_loss": self.logs['train_loss']})
 
 
-            if self.gpu_id == 0:                
-                if epoch == 0:
-                    self._save_checkpoint(epoch+1,self.checkpoint_path)
-                    self._generate_samples(epoch+1)
+            # if self.gpu_id == 0:                
+                # if epoch == 0:
+                #     self._save_checkpoint(epoch+1,self.checkpoint_path)
+                #     #self._generate_samples(epoch+1)
                                 
-                if (epoch + 1) % self.sampling_freq == 0:
-                    self._generate_samples(epoch+1)
+                # if (epoch + 1) % self.sampling_freq == 0:
+                #     self._generate_samples(epoch+1)
                     
-                if self.logs['val_loss'] < best_loss:
-                    print("replacing best checkpoint ...")
-                    self._save_checkpoint(epoch+1,self.checkpoint_path)
-                    best_loss = self.logs['val_loss']
-                    
+            if self.gpu_id == 0 and self.logs['val_loss'] < self.best_loss:
+                print("replacing best checkpoint ...")
+                self.best_loss = self.logs['val_loss']
+                self._save_checkpoint(epoch+1,self.checkpoint_path)
+                
                 
                 
 
 
 def load_train_objs(args):
-    train_set = NSTK(factor=args.factor, num_pred_steps=args.num_pred_steps,
-                     scratch_dir=args.scratch_dir)
-    val_set = NSTK(factor=args.factor, num_pred_steps=args.num_pred_steps,train=False,
-                   scratch_dir=args.scratch_dir)
+    if args.dataset == 'climate':
+        train_set = E5(factor=args.factor, num_pred_steps=args.num_pred_steps,
+                     scratch_dir='/pscratch/sd/v/vmikuni/FM/climate/train')
+        val_set = E5(factor=args.factor, num_pred_steps=args.num_pred_steps,train=False,
+                     scratch_dir='/pscratch/sd/v/vmikuni/FM/climate/valid')
+
+    elif args.dataset == 'simple':
+        train_set = Simple(factor=args.factor, num_pred_steps=args.num_pred_steps,
+                           scratch_dir='/pscratch/sd/v/vmikuni/FM/simple')
+        val_set = Simple(factor=args.factor, num_pred_steps=args.num_pred_steps,train=False,
+                         scratch_dir='/pscratch/sd/v/vmikuni/FM/simple')
+
+        
+    else:
+        train_set = NSKT(factor=args.factor, num_pred_steps=args.num_pred_steps,
+                         scratch_dir=args.scratch_dir)
+        val_set = NSKT(factor=args.factor, num_pred_steps=args.num_pred_steps,train=False,
+                       scratch_dir=args.scratch_dir)
+    unet_model,lowres_head,future_head, decoder_head = UNet(image_size=256, in_channels=1, out_channels=1, 
+                                                            base_width=args.base_width,
+                                                            num_pred_steps=args.num_pred_steps,
+                                                            Reynolds_number=True)
+        
     
-    unet_model,lowres_head,future_head = UNet(image_size=256, in_channels=1, out_channels=1, 
-                                            base_width=args.base_width,
-                                            num_pred_steps=args.num_pred_steps,
-                                            Reynolds_number=True)
-    
-    
-    model = GaussianDiffusionModel(base_model=unet_model.cuda(),
+    model = GaussianDiffusionModel(encoder_model=unet_model.cuda(),
+                                   decoder_model = decoder_head.cuda(),
                                    lowres_model = lowres_head.cuda(),
                                    forecast_model = future_head.cuda(),
                                    betas=(1e-4, 0.02),
                                    n_T=args.time_steps, 
                                    prediction_type = args.prediction_type, 
-                                   sampler = args.sampler)
+                                   sampler = args.sampler,
+                                   sample_loss = args.sample_loss)
     
     
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+    #optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+    factor = 1
+    if args.fine_tune:
+        factor = 4.
+    optimizer = Lion(model.parameters(), lr=3e-5/factor,betas=(0.95,0.98),weight_decay=0.01)
     return train_set,val_set, model, optimizer
 
 
@@ -294,8 +339,9 @@ def main(rank: int, world_size: int, sampling_freq: int, epochs: int, batch_size
 
 
     local_rank, rank = ddp_setup(rank, world_size)
+    device = torch.cuda.current_device()
     train_data,val_data,  model, optimizer = load_train_objs(args=args)
-    
+    model = model.to(device)
 
     if rank == 0:
         #==============================================================================
@@ -311,7 +357,7 @@ def main(rank: int, world_size: int, sampling_freq: int, epochs: int, batch_size
     
     trainer = Trainer(model, train_data,val_data, optimizer,
                       rank,local_rank, sampling_freq, run, epochs = epochs,
-                      run_name=args.run_name,scratch_dir = args.scratch_dir)
+                      run_name=args.run_name,scratch_dir = args.scratch_dir,fine_tune=args.fine_tune,dataset=args.dataset)
     trainer.train()
     destroy_process_group()
 
@@ -321,21 +367,23 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description='Minimalistic Diffusion Model for Super-resolution')
     parser.add_argument("--run-name", type=str, default='run1', help="Name of the current run.")
+    parser.add_argument("--dataset", type=str, default='nskt', help="Name of the dataset to train. Options are [nskt,climate,simple]")
     parser.add_argument("--scratch-dir", type=str, default='/pscratch/sd/v/vmikuni/FM/nskt_tensor/', help="Name of the current run.")
-    parser.add_argument('--epochs', default=300, type=int, help='Total epochs to train the model')
+    parser.add_argument('--epochs', default=400, type=int, help='Total epochs to train the model')
     parser.add_argument('--sampling-freq', default=30, type=int, help='How often to save a snapshot')
     parser.add_argument('--batch-size', default=16, type=int, help='Input batch size on each device (default: 32)')
 
     parser.add_argument('--num-pred-steps', default=3, type=int, help='different prediction steps to condition on')
 
-    parser.add_argument('--factor', default=4, type=int, help='upsampling factor')
-
-    parser.add_argument('--learning-rate', default=2e-4, type=int, help='learning rate')
+    parser.add_argument('--factor', default=8, type=int, help='upsampling factor')
+    parser.add_argument('--learning-rate', default=8e-5, type=int, help='learning rate')
 
     parser.add_argument("--prediction-type", type=str, default='v', help="Quantity to predict during training.")
     parser.add_argument("--sampler", type=str, default='ddim', help="Sampler to use to generate images")    
-    parser.add_argument("--time-steps", type=int, default=10, help="Time steps for sampling")    
+    parser.add_argument("--time-steps", type=int, default=2, help="Time steps for sampling")    
     parser.add_argument("--multi-node", action='store_true', default=False, help='Use multi node training')
+    parser.add_argument("--fine_tune", action='store_true', default=False, help='Fine tune using pretrained model')
+    parser.add_argument("--sample_loss", action='store_true', default=False, help='Run the model calling the generation step during training')
     
     parser.add_argument("--base-width", type=int, default=128, help="Basewidth of U-Net")    
 
@@ -356,7 +404,7 @@ if __name__ == "__main__":
 
         run = wandb.init(
             # Set the project where this run will be logged
-            project="MoE",
+            project="MoE_final",
             name=args.run_name,
             mode = mode,
             # Track hyperparameters and run metadata            
@@ -388,6 +436,5 @@ if __name__ == "__main__":
         world_size = torch.cuda.device_count()
         #Launch processes.
         print('Launching processes...')
-
-        mp.spawn(main, args=(world_size, args.sampling_freq, args.epochs, args.batch_size, run, args), nprocs=world_size)
+        main(0,1,args.sampling_freq, args.epochs, args.batch_size, run, args)
 
