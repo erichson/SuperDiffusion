@@ -64,6 +64,7 @@ class Trainer:
         run_name: str,
         scratch_dir: str,
         ema_val = 0.9999,
+        clip_value = 1.0,
         fine_tune = False,
         dataset = 'nskt'
     ) -> None:
@@ -74,6 +75,7 @@ class Trainer:
         self.train_data = train_data
         self.val_data = val_data
         self.optimizer = optimizer
+        self.clip_value = clip_value
         self.sampling_freq = sampling_freq
         self.model = DDP(model, device_ids=[local_gpu_id],
                          #find_unused_parameters=True
@@ -90,14 +92,7 @@ class Trainer:
         self.max_epochs = epochs
         self.checkpoint_dir = os.path.join(scratch_dir,'checkpoints')
         self.checkpoint_path = os.path.join(self.checkpoint_dir,f"checkpoint_{self.dataset}_{self.run_name}.pt")
-        self.lr_scheduler = lr_scheduler.CosineAnnealingLR(self.optimizer,
-                                                           T_max=self.max_epochs)
-
-        # self.lr_scheduler = scheduler(
-        #     optimizer=self.optimizer,
-        #     num_warmup_steps=len(self.train_data) * 1/get_world_size(), #5, # we need only a very shot warmup phase for our data
-        #     num_training_steps=(len(self.train_data) * self.max_epochs//get_world_size()),
-        # )
+        self.lr_scheduler = lr_scheduler.CosineAnnealingLR(self.optimizer,T_max=self.max_epochs)
                 
         if os.path.isfile(self.checkpoint_path):
             if self.gpu_id ==0: print(f"Loading checkpoint from {self.checkpoint_path}")
@@ -128,6 +123,7 @@ class Trainer:
             loss = self.model(lowres_snapshots,snapshots, future_snapshots, s, Reynolds_number)
             
             loss.backward()
+            torch.nn.utils.clip_grad_value_(self.model.parameters(), self.clip_value)
             self.optimizer.step()
             
             self.ema.update()
@@ -313,14 +309,15 @@ def load_train_objs(args):
                                    n_T=args.time_steps, 
                                    prediction_type = args.prediction_type, 
                                    sampler = args.sampler,
-                                   sample_loss = args.sample_loss)
+                                   sample_loss = args.sample_loss,
+                                   clip_loss = args.clip_loss)
     
     
     #optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     factor = 1
     if args.fine_tune:
         factor = 4.
-    optimizer = Lion(model.parameters(), lr=3e-5/factor,betas=(0.95,0.98),weight_decay=0.01)
+    optimizer = Lion(model.parameters(), lr=args.learning_rate/factor,betas=(0.95,0.98),weight_decay=0.01)
     return train_set,val_set, model, optimizer
 
 
@@ -331,7 +328,7 @@ def prepare_dataloader(dataset: Dataset, batch_size: int):
         pin_memory=torch.cuda.is_available(),
         shuffle=False,
         sampler=DistributedSampler(dataset),
-        num_workers=32
+        num_workers=16
     )
 
 
@@ -369,14 +366,14 @@ if __name__ == "__main__":
     parser.add_argument("--run-name", type=str, default='run1', help="Name of the current run.")
     parser.add_argument("--dataset", type=str, default='nskt', help="Name of the dataset to train. Options are [nskt,climate,simple]")
     parser.add_argument("--scratch-dir", type=str, default='/pscratch/sd/v/vmikuni/FM/nskt_tensor/', help="Name of the current run.")
-    parser.add_argument('--epochs', default=400, type=int, help='Total epochs to train the model')
+    parser.add_argument('--epochs', default=200, type=int, help='Total epochs to train the model')
     parser.add_argument('--sampling-freq', default=30, type=int, help='How often to save a snapshot')
     parser.add_argument('--batch-size', default=16, type=int, help='Input batch size on each device (default: 32)')
 
     parser.add_argument('--num-pred-steps', default=3, type=int, help='different prediction steps to condition on')
 
     parser.add_argument('--factor', default=8, type=int, help='upsampling factor')
-    parser.add_argument('--learning-rate', default=8e-5, type=int, help='learning rate')
+    parser.add_argument('--learning-rate', default=5e-5, type=int, help='learning rate')
 
     parser.add_argument("--prediction-type", type=str, default='v', help="Quantity to predict during training.")
     parser.add_argument("--sampler", type=str, default='ddim', help="Sampler to use to generate images")    
@@ -384,6 +381,7 @@ if __name__ == "__main__":
     parser.add_argument("--multi-node", action='store_true', default=False, help='Use multi node training')
     parser.add_argument("--fine_tune", action='store_true', default=False, help='Fine tune using pretrained model')
     parser.add_argument("--sample_loss", action='store_true', default=False, help='Run the model calling the generation step during training')
+    parser.add_argument("--clip_loss", action='store_true', default=False, help='Run the model calling the generation step during training')
     
     parser.add_argument("--base-width", type=int, default=128, help="Basewidth of U-Net")    
 

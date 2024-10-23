@@ -117,7 +117,7 @@ class NSKT(DataLoader):
                  factor,
                  num_pred_steps=1,
                  patch_size=256,
-                 stride = 64,
+                 stride = 2,
                  train=True,
                  scratch_dir='./',
                  oversampling = 40,
@@ -167,7 +167,7 @@ class E5(DataLoader):
         super().__init__(factor,num_pred_steps,patch_size,stride,train,scratch_dir,oversampling)
     
     def open_hdf5(self):
-        self.datasets = [h5py.File(path, 'r')['fields'] for path in self.paths]
+        return [h5py.File(path, 'r')['fields'] for path in self.paths]
 
 
 class Simple(DataLoader):
@@ -183,8 +183,7 @@ class Simple(DataLoader):
 
 
         if train:
-            self.paths = [os.path.join(scratch_dir,'ns_incomp_forced_res256_time10.steps500_visc0.07_reynolds100_wave2_maxvelo7.0_seed0.h5'),
-                          ]
+            self.paths = [os.path.join(scratch_dir,'ns_incomp_forced_res256_time10.steps500_visc0.07_reynolds100_wave2_maxvelo7.0_seed0.h5')]
             self.RN = [100.0]
         else:
             self.paths = [os.path.join(scratch_dir,'ns_incomp_forced_res256_time10.steps500_visc0.07_reynolds100_wave2_maxvelo7.0_seed1.h5')]            
@@ -193,7 +192,7 @@ class Simple(DataLoader):
         super().__init__(factor,num_pred_steps,patch_size,stride,train,scratch_dir,oversampling)
 
     def open_hdf5(self):
-        self.datasets = [h5py.File(path, 'r')['tasks']['vorticity'] for path in self.paths]
+        return [h5py.File(path, 'r')['tasks']['vorticity'] for path in self.paths]
 
 
 class EvalLoader(torch.utils.data.Dataset, ABC):
@@ -330,7 +329,6 @@ class E5_eval(EvalLoader):
                  shift_factor = 0,
                  skip_factor = 1,
                  ):
-        super(E5_eval, self).__init__()
 
         self.files_dict = {
             0:os.path.join(scratch_dir,'2009.h5'),
@@ -340,11 +338,11 @@ class E5_eval(EvalLoader):
                          Reynolds_number,scratch_dir,superres,shift_factor,skip_factor)
     
     def open_hdf5(self):
-        self.dataset = h5py.File(self.file, 'r')['fields'][:,1]
+        return h5py.File(self.file, 'r')['fields'][:,1]
 
 
 
-class Simple_eval(torch.utils.data.Dataset):
+class Simple_eval(EvalLoader):
     def __init__(self, factor, 
                  num_pred_steps=3, 
                  patch_size=256, 
@@ -357,7 +355,6 @@ class Simple_eval(torch.utils.data.Dataset):
                  shift_factor = 0,
                  skip_factor = 1,
                  ):
-        super(Simple_eval, self).__init__()
 
         self.files_dict = {
             100:os.path.join(scratch_dir,'ns_incomp_forced_res256_time10.steps500_visc0.07_reynolds100_wave2_maxvelo7.0_seed2.h5'),
@@ -368,4 +365,4 @@ class Simple_eval(torch.utils.data.Dataset):
                          Reynolds_number,scratch_dir,superres,shift_factor,skip_factor)
             
     def open_hdf5(self):
-        self.dataset = h5py.File(self.file, 'r')['tasks']['vorticity']
+        return h5py.File(self.file, 'r')['tasks']['vorticity']

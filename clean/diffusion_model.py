@@ -21,11 +21,13 @@ class GaussianDiffusionModel(nn.Module):
         prediction_type: str,
         sampler:str,
         sample_loss = False,
+        clip_loss = False,
         criterion: nn.Module = nn.L1Loss(),
     ) -> None:
         super(GaussianDiffusionModel, self).__init__()
 
         self.sample_loss = sample_loss
+        self.clip_loss = clip_loss
         self.prediction_type = prediction_type
         assert self.prediction_type in ['v','eps','x'], "ERROR: Prediction not supported. Options are v, eps, x"
         self.sampler = sampler
@@ -102,10 +104,14 @@ class GaussianDiffusionModel(nn.Module):
                                                              Re=torch.cat([Reynolds_number,Reynolds_number],0),
                                                              s = torch.cat([torch.zeros_like(s),s],0)
                                                              )
-            
-            #Add clip loss to align the bottlenecks
-            pred1,pred2=torch.split(predicted,predicted.shape[0]//2,0)
-            #loss_clip = CLIPLoss(pred1,pred2)
+
+            if self.clip_loss:
+                #Add clip loss to align the bottlenecks
+                pred1,pred2=torch.split(predicted,predicted.shape[0]//2,0)
+                loss_clip = CLIPLoss(pred1,pred2)
+            else:
+                loss_clip = 0.0
+                
             residual_snapshots_t_SR, residual_snapshots_t_FC = torch.split(residual_snapshots_t,residual_snapshots_t.shape[0]//2,0)
         
 
@@ -140,9 +146,7 @@ class GaussianDiffusionModel(nn.Module):
             
 
         
-        return self.criterion(predicted, target)
-    #+ loss_clip
-
+        return self.criterion(predicted, target) + loss_clip
 
 
     #@torch.compile
@@ -235,10 +239,6 @@ class GaussianDiffusionModel(nn.Module):
                     mean = alpha * snapshots_i - sigma * pred
                     eps = pred * alpha + snapshots_i * sigma
 
-
-                # xvar = 0.1/(2. + torch.exp(logsnr))
-                # zvar = xvar*(alpha_ - alpha*sigma_/sigma)**2
-                # sigma_ = torch.sqrt(sigma_**2 + (256**2/torch.norm(eps,p=2,dim=(1,2,3),keepdim=True))*zvar)
                 snapshots_i = alpha_ * mean + eps * sigma_
 
 
@@ -263,11 +263,10 @@ def CLIPLoss(emb1,emb2,temperature=1.0):
     logits = (emb1 @ emb2.T) / temperature
     emb1_similarity = emb1 @ emb1.T
     emb2_similarity = emb2 @ emb2.T
-    targets = F.softmax(
-        (emb1_similarity + emb2_similarity) / 2 * temperature, dim=-1
-    )
+    targets = torch.arange(B).to(emb1.device)
+    
     emb2_loss = cross_entropy(logits, targets, reduction='none')
-    emb1_loss = cross_entropy(logits.T, targets.T, reduction='none')
+    emb1_loss = cross_entropy(logits.T, targets, reduction='none')
     loss =  (emb1_loss + emb2_loss) / 2.0 # shape: (batch_size)
     return loss.mean()
 
@@ -282,23 +281,16 @@ def cross_entropy(preds, targets, reduction='none'):
 
     
 @torch.compile
-def logsnr_schedule_cosine(t, logsnr_min=-20., logsnr_max=20., shift = 16.):
+def logsnr_schedule_cosine(t, logsnr_min=-15., logsnr_max=15., shift = 1.):
     b = torch.atan(torch.exp(-0.5 * torch.tensor(logsnr_max)))
     a = torch.atan(torch.exp(-0.5 * torch.tensor(logsnr_min))) - b
     return -2. * torch.log(torch.tan(a * t + b)*shift)
-
-def inv_logsnr_schedule_cosine(logsnr, logsnr_min=-20., logsnr_max=20.,shift=16.):
-    b = torch.atan(torch.exp(-0.5 * torch.tensor(logsnr_max)))
-    a = torch.atan(torch.exp(-0.5 * torch.tensor(logsnr_min))) - b
-    return torch.atan(torch.exp(-0.5 * logsnr)/shift)/a -b/a
-
 
 #@torch.compile
 def get_logsnr_alpha_sigma(time):
     logsnr = logsnr_schedule_cosine(time)[:,None,None,None]
     alpha = torch.sqrt(torch.sigmoid(logsnr))
     sigma = torch.sqrt(torch.sigmoid(-logsnr))
-
     return logsnr, alpha, sigma    
     
 
