@@ -101,7 +101,8 @@ class NSTK_FC(torch.utils.data.Dataset):
         dataset = self.datasets[dataset_idx]
 
         ###! CHANGE snapshot_idx here
-        snapshot_idx = 110
+        snapshot_idx = 250
+        
 
         patch = torch.from_numpy(dataset[snapshot_idx, patch_row:(
             patch_row + self.patch_size), patch_col:(patch_col + self.patch_size)]).float().unsqueeze(0)
@@ -236,9 +237,9 @@ if __name__ == "__main__":
                     if not os.path.exists("./samples"):
                         os.makedirs("./samples")
 
-                    np.save(
-                        f'samples/fullsnapshot_superres_RE_{args.Reynolds_number}_SR_{args.sampler}_{args.time_steps}_unet_{args.base_width}_' + str(i+1) + '.npy', samples)
-                    print('saved samples')
+                    file_name = f'samples/fullsnapshot_superres_RE_idx250_{args.Reynolds_number}_SR_{args.sampler}_{args.time_steps}_unet_{args.base_width}_' + str(i+1) + '.npy'
+                    np.save(file_name, samples)
+                    print(f'saved samples at {file_name}')
 
                     #if i == 10:
                     #    break
@@ -248,4 +249,4 @@ if __name__ == "__main__":
 
 
 
-# export CUDA_VISIBLE_DEVICES=6; python evaluation_fullsnapshot.py --task superres --batch-size 64 --Reynolds-number 16000
+# export CUDA_VISIBLE_DEVICES=0; python evaluation_SR_with_snapshots.py --task superres --batch-size 64 --Reynolds-number 16000

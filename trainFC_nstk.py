@@ -75,14 +75,11 @@ class Trainer:
     def _run_epoch(self, epoch):
         self.train_data.sampler.set_epoch(epoch)
         loss_values = []
-        for conditioning_lr_snapshots, past_snapshots, targets, s, Reynolds_number in self .train_data:
-            conditioning_lr_snapshots = conditioning_lr_snapshots.to(self.gpu_id)
+        for conditioning_lr_snapshots, past_snapshots, targets, s, Reynolds_number in self.train_data:
             past_snapshots = past_snapshots.to(self.gpu_id)
-            s = s.to(self.gpu_id)
-            Reynolds_number = Reynolds_number.to(self.gpu_id)
-
-            targets = targets.to(self.gpu_id)            
-            loss_values.append(self._run_batch(targets, conditioning_lr_snapshots, past_snapshots, s, Reynolds_number))
+            targets = targets.to(self.gpu_id)    
+                    
+            loss_values.append(self._run_batch(targets, None, past_snapshots, None, None))
             if self.gpu_id == 0:
                 print(f"Epoch: {epoch} - {len(loss_values)}/{len(self.train_data)} - loss = {np.mean(loss_values):.4f}")
                 self.run.log({"step_loss": np.mean(loss_values)})
@@ -241,7 +238,7 @@ if __name__ == "__main__":
     parser.add_argument('--sampling-freq', default=25, type=int, help='How often to save a snapshot')
     parser.add_argument('--batch-size', default=512, type=int, help='Input batch size on each device (default: 32)')
 
-    parser.add_argument('--superres', default=True, type=bool, help='Superresolution')
+    parser.add_argument('--superres', default=False, type=bool, help='Superresolution')
     parser.add_argument('--forecast', default=True, type=bool, help='Forecasting')
     parser.add_argument('--num-pred-steps', default=1, type=int, help='different prediction steps to condition on')
 
